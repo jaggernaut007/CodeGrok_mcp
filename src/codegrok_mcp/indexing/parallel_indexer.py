@@ -37,6 +37,7 @@ class ParseResult:
         success: True if parsing succeeded, False otherwise
         error: Error message if parsing failed, None otherwise
     """
+
     filepath: str
     symbols: List[Symbol]
     success: bool
@@ -55,6 +56,7 @@ class ParallelProgress:
         _completed: Number of completed items (access via .completed property)
         _errors: Number of errors encountered (access via .errors property)
     """
+
     total: int
     _completed: int = 0
     _errors: int = 0
@@ -95,10 +97,7 @@ class ParallelProgress:
             return self._errors
 
 
-def parse_file_worker(
-    filepath: Path,
-    parser_factory: ThreadLocalParserFactory
-) -> ParseResult:
+def parse_file_worker(filepath: Path, parser_factory: ThreadLocalParserFactory) -> ParseResult:
     """
     Worker function for parallel file parsing.
 
@@ -120,15 +119,10 @@ def parse_file_worker(
             filepath=str(filepath),
             symbols=list(parsed.symbols),
             success=parsed.error is None,
-            error=parsed.error
+            error=parsed.error,
         )
     except Exception as e:
-        return ParseResult(
-            filepath=str(filepath),
-            symbols=[],
-            success=False,
-            error=str(e)
-        )
+        return ParseResult(filepath=str(filepath), symbols=[], success=False, error=str(e))
 
 
 def parallel_parse_files(
@@ -185,10 +179,7 @@ def parallel_parse_files(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
-        future_to_file = {
-            executor.submit(parse_file_worker, f, parser_factory): f
-            for f in files
-        }
+        future_to_file = {executor.submit(parse_file_worker, f, parser_factory): f for f in files}
 
         # Process results as they complete
         for future in as_completed(future_to_file):
@@ -200,33 +191,33 @@ def parallel_parse_files(
                 if result.success and result.symbols:
                     with symbols_lock:
                         all_symbols.extend(result.symbols)
-                    emit("file_parsed", {
-                        "path": result.filepath,
-                        "symbols": len(result.symbols),
-                        "index": completed,
-                        "total": progress.total
-                    })
+                    emit(
+                        "file_parsed",
+                        {
+                            "path": result.filepath,
+                            "symbols": len(result.symbols),
+                            "index": completed,
+                            "total": progress.total,
+                        },
+                    )
                 elif result.error:
                     progress.increment_errors()
-                    emit("parse_error", {
-                        "path": result.filepath,
-                        "error": result.error
-                    })
+                    emit("parse_error", {"path": result.filepath, "error": result.error})
                 else:
                     # File parsed but no symbols found (not an error)
-                    emit("file_parsed", {
-                        "path": result.filepath,
-                        "symbols": 0,
-                        "index": completed,
-                        "total": progress.total
-                    })
+                    emit(
+                        "file_parsed",
+                        {
+                            "path": result.filepath,
+                            "symbols": 0,
+                            "index": completed,
+                            "total": progress.total,
+                        },
+                    )
 
             except Exception as e:  # pragma: no cover
                 progress.increment_completed()
                 progress.increment_errors()
-                emit("parse_error", {
-                    "path": str(filepath),
-                    "error": str(e)
-                })
+                emit("parse_error", {"path": str(filepath), "error": str(e)})
 
     return all_symbols, progress.errors

@@ -3,12 +3,14 @@ import tempfile
 from pathlib import Path
 from codegrok_mcp.mcp.state import reset_state, get_state
 
+
 @pytest.fixture(autouse=True)
 def clean_state():
     """Reset MCP state before and after each test."""
     reset_state()
     yield
     reset_state()
+
 
 @pytest.fixture
 def temp_project(tmp_path):
@@ -43,18 +45,21 @@ CONSTANT_VALUE = 42
 
     return tmp_path
 
+
 @pytest.fixture
 def multi_lang_project(tmp_path):
     """Create a multi-language project."""
-    (tmp_path / "app.py").write_text('def main(): pass')
-    (tmp_path / "helper.js").write_text('function helper() { return 1; }')
-    (tmp_path / "server.go").write_text('package main\n\nfunc main() {}')
+    (tmp_path / "app.py").write_text("def main(): pass")
+    (tmp_path / "helper.js").write_text("function helper() { return 1; }")
+    (tmp_path / "server.go").write_text("package main\n\nfunc main() {}")
     return tmp_path
+
 
 @pytest.fixture
 def python_project_fixture():
     """Return path to the static Python project fixture."""
     return Path(__file__).parent / "fixtures" / "sample_projects" / "python_project"
+
 
 @pytest.fixture
 def multi_lang_fixture():

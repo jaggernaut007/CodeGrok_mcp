@@ -148,8 +148,7 @@ class TreeSitterParser(IParser):
         file_size_mb = file_path.stat().st_size / (1024 * 1024)
         if file_size_mb > self.MAX_FILE_SIZE_MB:
             logger.warning(
-                f"Large file ({file_size_mb:.2f}MB): {filepath}. "
-                f"Parsing may be slow."
+                f"Large file ({file_size_mb:.2f}MB): {filepath}. " f"Parsing may be slow."
             )
 
         # Read file content
@@ -214,9 +213,7 @@ class TreeSitterParser(IParser):
             root_node = tree.root_node
 
             # Extract symbols and imports
-            symbols = self._extract_symbols(
-                root_node, content, filepath, language, config
-            )
+            symbols = self._extract_symbols(root_node, content, filepath, language, config)
             imports = self._extract_imports(root_node, content, config)
 
             parse_time = time.time() - start_time
@@ -279,13 +276,13 @@ class TreeSitterParser(IParser):
         sample = content[:8192]
 
         # Check for null bytes (common in binary files)
-        if b'\x00' in sample:
+        if b"\x00" in sample:
             return True
 
         # Check for high ratio of non-text bytes
         try:
             # Try to decode as UTF-8
-            sample.decode('utf-8')
+            sample.decode("utf-8")
             return False
         except UnicodeDecodeError:
             # Count how many bytes fail to decode
@@ -341,10 +338,10 @@ class TreeSitterParser(IParser):
         class_stack: List[str] = []
 
         # Get node types from config
-        function_types = config.get('function_types', [])
-        class_types = config.get('class_types', [])
-        method_types = config.get('method_types', [])
-        constant_types = config.get('constant_types', [])
+        function_types = config.get("function_types", [])
+        class_types = config.get("class_types", [])
+        method_types = config.get("method_types", [])
+        constant_types = config.get("constant_types", [])
 
         def traverse(node, depth: int = 0):
             """Recursively traverse the AST and extract symbols."""
@@ -354,9 +351,7 @@ class TreeSitterParser(IParser):
 
             # Extract classes
             if node_type in class_types:
-                symbol = self._extract_class_symbol(
-                    node, content, filepath, language, config
-                )
+                symbol = self._extract_class_symbol(node, content, filepath, language, config)
                 if symbol:
                     symbols.append(symbol)
                     # Push class onto stack for method extraction
@@ -387,9 +382,7 @@ class TreeSitterParser(IParser):
 
             # Extract constants (module-level only)
             elif node_type in constant_types and not current_class:
-                symbol = self._extract_constant_symbol(
-                    node, content, filepath, language, config
-                )
+                symbol = self._extract_constant_symbol(node, content, filepath, language, config)
                 if symbol:
                     symbols.append(symbol)
 
@@ -436,7 +429,7 @@ class TreeSitterParser(IParser):
         line_end = node.end_point[0] + 1
 
         # Extract signature
-        signature = self._get_node_text(node, content).split('\n')[0].strip()
+        signature = self._get_node_text(node, content).split("\n")[0].strip()
 
         # Extract docstring
         docstring = self._extract_docstring(node, content, config)
@@ -499,7 +492,7 @@ class TreeSitterParser(IParser):
         line_end = node.end_point[0] + 1
 
         # Extract signature
-        signature = self._get_node_text(node, content).split('\n')[0].strip()
+        signature = self._get_node_text(node, content).split("\n")[0].strip()
 
         # Extract docstring
         docstring = self._extract_docstring(node, content, config)
@@ -563,71 +556,83 @@ class TreeSitterParser(IParser):
         # Extract the name based on language patterns
         name = None
 
-        if language == 'python':
+        if language == "python":
             # Python: expression_statement -> assignment -> identifier
             # Look for UPPERCASE names (convention for constants)
             for child in node.children:
-                if child.type == 'assignment':
+                if child.type == "assignment":
                     for subchild in child.children:
-                        if subchild.type == 'identifier':
+                        if subchild.type == "identifier":
                             potential_name = self._get_node_text(subchild, content)
                             # Only extract UPPERCASE constants
-                            if potential_name.isupper() or '_' in potential_name and potential_name.replace('_', '').isupper():
+                            if (
+                                potential_name.isupper()
+                                or "_" in potential_name
+                                and potential_name.replace("_", "").isupper()
+                            ):
                                 name = potential_name
                             break
                     break
 
-        elif language == 'javascript' or language == 'typescript':
+        elif language == "javascript" or language == "typescript":
             # JavaScript: lexical_declaration -> variable_declarator -> identifier
             # Only extract const with UPPERCASE names (convention for constants)
-            if full_text.startswith('const '):
+            if full_text.startswith("const "):
                 for child in node.children:
-                    if child.type == 'variable_declarator':
+                    if child.type == "variable_declarator":
                         for subchild in child.children:
-                            if subchild.type == 'identifier':
+                            if subchild.type == "identifier":
                                 potential_name = self._get_node_text(subchild, content)
                                 # Only UPPERCASE constants
-                                if potential_name.isupper() or ('_' in potential_name and potential_name.replace('_', '').isupper()):
+                                if potential_name.isupper() or (
+                                    "_" in potential_name
+                                    and potential_name.replace("_", "").isupper()
+                                ):
                                     name = potential_name
                                 break
                         break
 
                         break
-        
+
         # Add pragma for other languages not covered by tests yet
-        elif language == 'go':  # pragma: no cover
+        elif language == "go":  # pragma: no cover
             # Go: const_declaration -> const_spec -> identifier
             # Return all const names as one symbol (grouped)
             const_names = []
             for child in node.children:
-                if child.type == 'const_spec':
+                if child.type == "const_spec":
                     for subchild in child.children:
-                        if subchild.type == 'identifier':
+                        if subchild.type == "identifier":
                             const_names.append(self._get_node_text(subchild, content))
                             break
             if const_names:
-                name = ', '.join(const_names)
+                name = ", ".join(const_names)
 
-        elif language == 'bash':  # pragma: no cover
+        elif language == "bash":  # pragma: no cover
             # Bash: variable_assignment or declaration_command
             # Only extract UPPERCASE variables (constants by convention)
-            if node.type == 'declaration_command':
+            if node.type == "declaration_command":
                 # readonly VAR=value
                 for child in node.children:
-                    if child.type == 'variable_assignment':
+                    if child.type == "variable_assignment":
                         for subchild in child.children:
-                            if subchild.type == 'variable_name':
+                            if subchild.type == "variable_name":
                                 potential_name = self._get_node_text(subchild, content)
-                                if potential_name.isupper() or ('_' in potential_name and potential_name.replace('_', '').isupper()):
+                                if potential_name.isupper() or (
+                                    "_" in potential_name
+                                    and potential_name.replace("_", "").isupper()
+                                ):
                                     name = potential_name
                                 break
                         break
-            elif node.type == 'variable_assignment':
+            elif node.type == "variable_assignment":
                 # VAR=value - only at top level with UPPERCASE
                 for child in node.children:
-                    if child.type == 'variable_name':
+                    if child.type == "variable_name":
                         potential_name = self._get_node_text(child, content)
-                        if potential_name.isupper() or ('_' in potential_name and potential_name.replace('_', '').isupper()):
+                        if potential_name.isupper() or (
+                            "_" in potential_name and potential_name.replace("_", "").isupper()
+                        ):
                             name = potential_name
                         break
 
@@ -653,9 +658,7 @@ class TreeSitterParser(IParser):
             calls=[],
         )
 
-    def _extract_imports(
-        self, root_node, content: bytes, config: Dict[str, Any]
-    ) -> List[str]:
+    def _extract_imports(self, root_node, content: bytes, config: Dict[str, Any]) -> List[str]:
         """
         Extract all import statements from the file.
 
@@ -668,7 +671,7 @@ class TreeSitterParser(IParser):
             List of import statement strings
         """
         imports: List[str] = []
-        import_types = config.get('import_types', [])
+        import_types = config.get("import_types", [])
 
         def traverse(node):
             if node.type in import_types:
@@ -682,9 +685,7 @@ class TreeSitterParser(IParser):
         traverse(root_node)
         return imports
 
-    def _extract_imports_from_node(
-        self, node, content: bytes, config: Dict[str, Any]
-    ) -> List[str]:
+    def _extract_imports_from_node(self, node, content: bytes, config: Dict[str, Any]) -> List[str]:
         """
         Extract imports from a specific node (for scoped imports).
 
@@ -697,7 +698,7 @@ class TreeSitterParser(IParser):
             List of import statement strings
         """
         imports: List[str] = []
-        import_types = config.get('import_types', [])
+        import_types = config.get("import_types", [])
 
         def traverse(n):
             if n.type in import_types:
@@ -711,9 +712,7 @@ class TreeSitterParser(IParser):
         traverse(node)
         return imports
 
-    def _extract_calls_from_node(
-        self, node, content: bytes, config: Dict[str, Any]
-    ) -> List[str]:
+    def _extract_calls_from_node(self, node, content: bytes, config: Dict[str, Any]) -> List[str]:
         """
         Extract function calls from a specific node.
 
@@ -726,7 +725,7 @@ class TreeSitterParser(IParser):
             List of function call names
         """
         calls: Set[str] = set()
-        call_types = config.get('call_types', [])
+        call_types = config.get("call_types", [])
 
         def traverse(n):
             if n.type in call_types:
@@ -754,34 +753,32 @@ class TreeSitterParser(IParser):
         """
         # Try to find the function identifier
         for child in call_node.children:
-            if child.type in ('identifier', 'name', 'word', 'field_identifier'):
+            if child.type in ("identifier", "name", "word", "field_identifier"):
                 return self._get_node_text(child, content).strip()
-            elif child.type == 'attribute':
+            elif child.type == "attribute":
                 # For method calls like obj.method()
                 for subchild in child.children:
-                    if subchild.type in ('identifier', 'property_identifier', 'field_identifier'):
+                    if subchild.type in ("identifier", "property_identifier", "field_identifier"):
                         return self._get_node_text(subchild, content).strip()
-            elif child.type == 'member_expression':
+            elif child.type == "member_expression":
                 # JavaScript/TypeScript member expressions
                 for subchild in child.children:
-                    if subchild.type in ('property_identifier', 'identifier'):
+                    if subchild.type in ("property_identifier", "identifier"):
                         return self._get_node_text(subchild, content).strip()
-            elif child.type == 'selector_expression':
+            elif child.type == "selector_expression":
                 # Go selector expressions
                 for subchild in child.children:
-                    if subchild.type in ('field_identifier', 'identifier'):
+                    if subchild.type in ("field_identifier", "identifier"):
                         return self._get_node_text(subchild, content).strip()
 
         # Fallback: try to get first identifier child
         if call_node.child_count > 0:
             first_child = call_node.children[0]
-            return self._get_node_text(first_child, content).strip().split('(')[0]
+            return self._get_node_text(first_child, content).strip().split("(")[0]
 
         return None
 
-    def _extract_docstring(
-        self, node, content: bytes, config: Dict[str, Any]
-    ) -> str:
+    def _extract_docstring(self, node, content: bytes, config: Dict[str, Any]) -> str:
         """
         Extract docstring from a function or class node.
 
@@ -800,14 +797,12 @@ class TreeSitterParser(IParser):
 
         # Check first child of body for docstring
         for child in body.children:
-            if child.type == 'expression_statement':
+            if child.type == "expression_statement":
                 # Python: first expression statement might be docstring
                 for subchild in child.children:
-                    if subchild.type in ('string', 'string_literal'):
-                        return self._clean_docstring(
-                            self._get_node_text(subchild, content)
-                        )
-            elif child.type in ('string', 'string_literal', 'comment'):
+                    if subchild.type in ("string", "string_literal"):
+                        return self._clean_docstring(self._get_node_text(subchild, content))
+            elif child.type in ("string", "string_literal", "comment"):
                 return self._clean_docstring(self._get_node_text(child, content))
 
         return ""
@@ -823,15 +818,15 @@ class TreeSitterParser(IParser):
         Returns:
             Body node or None
         """
-        body_field = config.get('body_field', 'body')
+        body_field = config.get("body_field", "body")
 
         # Try named child first
         for child in node.children:
-            if child.type in ('block', 'body', 'compound_statement', 'statement_block'):
+            if child.type in ("block", "body", "compound_statement", "statement_block"):
                 return child
 
         # Try field access
-        if hasattr(node, 'child_by_field_name'):
+        if hasattr(node, "child_by_field_name"):
             body = node.child_by_field_name(body_field)
             if body:
                 return body
@@ -851,25 +846,25 @@ class TreeSitterParser(IParser):
             Name string or None
         """
         # Try field-based access first
-        if hasattr(node, 'child_by_field_name'):
-            name_node = node.child_by_field_name('name')
+        if hasattr(node, "child_by_field_name"):
+            name_node = node.child_by_field_name("name")
             if name_node:
                 return self._get_node_text(name_node, content).strip()
 
         # Try finding identifier child
         for child in node.children:
             if child.type in (
-                'identifier',
-                'name',
-                'type_identifier',
-                'field_identifier',
-                'property_identifier',
+                "identifier",
+                "name",
+                "type_identifier",
+                "field_identifier",
+                "property_identifier",
             ):
                 return self._get_node_text(child, content).strip()
 
         # For C/C++ functions with declarators
         for child in node.children:
-            if child.type in ('declarator', 'function_declarator'):
+            if child.type in ("declarator", "function_declarator"):
                 return self._get_node_name(child, content, config)
 
         return None
@@ -886,10 +881,10 @@ class TreeSitterParser(IParser):
             Node text as string
         """
         try:
-            return content[node.start_byte : node.end_byte].decode('utf-8')
+            return content[node.start_byte : node.end_byte].decode("utf-8")
         except UnicodeDecodeError:
             # Fallback for binary content
-            return content[node.start_byte : node.end_byte].decode('utf-8', errors='ignore')
+            return content[node.start_byte : node.end_byte].decode("utf-8", errors="ignore")
 
     def _get_code_snippet(self, node, content: bytes) -> str:
         """
@@ -938,7 +933,7 @@ class TreeSitterParser(IParser):
         cleaned = cleaned.strip()
 
         # For multi-line docstrings, extract just the first line/paragraph
-        lines = [line.strip() for line in cleaned.split('\n') if line.strip()]
+        lines = [line.strip() for line in cleaned.split("\n") if line.strip()]
         if lines:
             return lines[0]
 
@@ -991,6 +986,6 @@ class ThreadLocalParserFactory:
         Returns:
             TreeSitterParser instance unique to the calling thread
         """
-        if not hasattr(self._local, 'parser'):
+        if not hasattr(self._local, "parser"):
             self._local.parser = TreeSitterParser()
         return self._local.parser

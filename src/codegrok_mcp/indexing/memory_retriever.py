@@ -22,14 +22,13 @@ import chromadb
 from codegrok_mcp.indexing.embedding_service import get_embedding_service, EmbeddingService
 from codegrok_mcp.core.models import Memory, MemoryType
 
-
 # TTL duration mappings
 TTL_DURATIONS = {
-    "session": timedelta(hours=24),      # Cleared on session end or after 24h
+    "session": timedelta(hours=24),  # Cleared on session end or after 24h
     "day": timedelta(days=1),
     "week": timedelta(weeks=1),
     "month": timedelta(days=30),
-    "permanent": None                     # Never expires
+    "permanent": None,  # Never expires
 }
 
 
@@ -55,7 +54,7 @@ class MemoryRetriever:
         embedding_model: str = "coderankembed",
         verbose: bool = False,
         persist_path: Optional[str] = None,
-        embedding_service: Optional[EmbeddingService] = None
+        embedding_service: Optional[EmbeddingService] = None,
     ):
         """
         Initialize the memory retriever.
@@ -75,8 +74,7 @@ class MemoryRetriever:
 
         # Reuse embedding service singleton (same model as code embeddings)
         self.embedding_service = embedding_service or get_embedding_service(
-            embedding_model,
-            show_progress=False
+            embedding_model, show_progress=False
         )
 
         # Initialize ChromaDB (reuse existing client if possible)
@@ -89,15 +87,11 @@ class MemoryRetriever:
         # Get or create memories collection
         self.collection = self.chroma_client.get_or_create_collection(
             name=self.COLLECTION_NAME,
-            metadata={"description": "Memory storage for conversations, status, decisions"}
+            metadata={"description": "Memory storage for conversations, status, decisions"},
         )
 
         # Statistics
-        self.stats = {
-            'total_memories': 0,
-            'by_type': {},
-            'last_cleanup': None
-        }
+        self.stats = {"total_memories": 0, "by_type": {}, "last_cleanup": None}
 
         self._load_stats()
 
@@ -112,9 +106,9 @@ class MemoryRetriever:
             metadata_path = Path(self.persist_path).parent / self.METADATA_FILE
             if metadata_path.exists():
                 try:
-                    with open(metadata_path, 'r') as f:
+                    with open(metadata_path, "r") as f:
                         data = json.load(f)
-                        self.stats = data.get('stats', self.stats)
+                        self.stats = data.get("stats", self.stats)
                 except Exception:
                     pass
 
@@ -123,8 +117,8 @@ class MemoryRetriever:
         if self.persist_path:
             metadata_path = Path(self.persist_path).parent / self.METADATA_FILE
             try:
-                with open(metadata_path, 'w') as f:
-                    json.dump({'stats': self.stats}, f, indent=2)
+                with open(metadata_path, "w") as f:
+                    json.dump({"stats": self.stats}, f, indent=2)
             except Exception:
                 pass
 
@@ -135,7 +129,7 @@ class MemoryRetriever:
         tags: List[str] = None,
         ttl: str = "permanent",
         source: str = "user",
-        metadata: Dict[str, Any] = None
+        metadata: Dict[str, Any] = None,
     ) -> Memory:
         """
         Store a new memory with automatic embedding.
@@ -160,7 +154,7 @@ class MemoryRetriever:
             tags=tags or [],
             ttl=ttl,
             source=source,
-            metadata=metadata or {}
+            metadata=metadata or {},
         )
 
         # Generate embedding
@@ -168,13 +162,13 @@ class MemoryRetriever:
 
         # Build ChromaDB metadata (flatten for ChromaDB compatibility)
         chroma_metadata = {
-            'memory_type': memory.memory_type.value,
-            'project': memory.project,
-            'tags': ','.join(memory.tags),  # ChromaDB doesn't support list values
-            'created_at': memory.created_at,
-            'accessed_at': memory.accessed_at,
-            'ttl': memory.ttl,
-            'source': memory.source
+            "memory_type": memory.memory_type.value,
+            "project": memory.project,
+            "tags": ",".join(memory.tags),  # ChromaDB doesn't support list values
+            "created_at": memory.created_at,
+            "accessed_at": memory.accessed_at,
+            "ttl": memory.ttl,
+            "source": memory.source,
         }
 
         # Store in ChromaDB
@@ -182,13 +176,13 @@ class MemoryRetriever:
             ids=[memory.id],
             embeddings=[embedding],
             documents=[memory.content],
-            metadatas=[chroma_metadata]
+            metadatas=[chroma_metadata],
         )
 
         # Update stats
-        self.stats['total_memories'] = self.collection.count()
+        self.stats["total_memories"] = self.collection.count()
         type_key = memory.memory_type.value
-        self.stats['by_type'][type_key] = self.stats['by_type'].get(type_key, 0) + 1
+        self.stats["by_type"][type_key] = self.stats["by_type"].get(type_key, 0) + 1
         self._save_stats()
 
         self._log(f"Stored memory: {memory.id[:8]}... ({memory_type})")
@@ -202,7 +196,7 @@ class MemoryRetriever:
         tags: Optional[List[str]] = None,
         n_results: int = 5,
         time_range: Optional[str] = None,
-        min_relevance: float = 0.0
+        min_relevance: float = 0.0,
     ) -> List[Dict[str, Any]]:
         """
         Semantically search memories.
@@ -241,33 +235,32 @@ class MemoryRetriever:
         if memory_type:
             where_clauses.append({"memory_type": memory_type})
 
-        chroma_where = (
-            {"$and": where_clauses} if len(where_clauses) > 1
-            else where_clauses[0]
-        )
+        chroma_where = {"$and": where_clauses} if len(where_clauses) > 1 else where_clauses[0]
 
         try:
             results = self.collection.query(
                 query_embeddings=[query_embedding],
                 n_results=min(n_results * 2, 50),  # Over-fetch for tag/time filtering
                 where=chroma_where,
-                include=["documents", "metadatas", "distances"]
+                include=["documents", "metadatas", "distances"],
             )
         except Exception as e:
             self._log(f"Query error: {e}")
             return []
 
-        if not results['ids'] or not results['ids'][0]:
+        if not results["ids"] or not results["ids"][0]:
             return []
 
         # Process results
         memories = []
-        for i, (id_, doc, metadata, distance) in enumerate(zip(
-            results['ids'][0],
-            results['documents'][0],
-            results['metadatas'][0],
-            results['distances'][0]
-        )):
+        for i, (id_, doc, metadata, distance) in enumerate(
+            zip(
+                results["ids"][0],
+                results["documents"][0],
+                results["metadatas"][0],
+                results["distances"][0],
+            )
+        ):
             # Convert distance to relevance (ChromaDB uses L2 distance)
             # Lower distance = higher relevance
             relevance = 1.0 / (1.0 + distance)
@@ -277,10 +270,10 @@ class MemoryRetriever:
 
             # Apply time_range filter (post-filter - ChromaDB date ops are limited)
             if time_cutoff:
-                created_str = metadata.get('created_at', '')
+                created_str = metadata.get("created_at", "")
                 if created_str:
                     try:
-                        created = datetime.fromisoformat(created_str.replace('Z', '+00:00'))
+                        created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
                         if created < time_cutoff:
                             continue
                     except ValueError:
@@ -288,19 +281,21 @@ class MemoryRetriever:
 
             # Apply tags filter (post-filter - ChromaDB doesn't support list contains)
             if tags:
-                stored_tags = set(metadata.get('tags', '').split(','))
+                stored_tags = set(metadata.get("tags", "").split(","))
                 if not stored_tags.intersection(set(tags)):
                     continue
 
-            memories.append({
-                'id': id_,
-                'content': doc,
-                'memory_type': metadata.get('memory_type'),
-                'tags': metadata.get('tags', '').split(',') if metadata.get('tags') else [],
-                'created_at': metadata.get('created_at'),
-                'relevance': round(relevance, 3),
-                'source': metadata.get('source', 'unknown')
-            })
+            memories.append(
+                {
+                    "id": id_,
+                    "content": doc,
+                    "memory_type": metadata.get("memory_type"),
+                    "tags": metadata.get("tags", "").split(",") if metadata.get("tags") else [],
+                    "created_at": metadata.get("created_at"),
+                    "relevance": round(relevance, 3),
+                    "source": metadata.get("source", "unknown"),
+                }
+            )
 
             if len(memories) >= n_results:
                 break
@@ -310,10 +305,7 @@ class MemoryRetriever:
             now = datetime.now(timezone.utc).isoformat()
             for mem in memories:
                 try:
-                    self.collection.update(
-                        ids=[mem['id']],
-                        metadatas=[{'accessed_at': now}]
-                    )
+                    self.collection.update(ids=[mem["id"]], metadatas=[{"accessed_at": now}])
                 except Exception:
                     pass  # Non-critical
 
@@ -326,7 +318,7 @@ class MemoryRetriever:
         memory_id: Optional[str] = None,
         memory_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
-        older_than: Optional[str] = None
+        older_than: Optional[str] = None,
     ) -> Dict[str, int]:
         """
         Remove memories matching criteria.
@@ -346,7 +338,7 @@ class MemoryRetriever:
             # Delete specific memory - verify it exists first
             try:
                 existing = self.collection.get(ids=[memory_id])
-                if existing['ids']:
+                if existing["ids"]:
                     self.collection.delete(ids=[memory_id])
                     deleted = 1
                 else:
@@ -364,13 +356,12 @@ class MemoryRetriever:
             if older_than or tags:
                 # Get all memories for this project
                 all_memories = self.collection.get(
-                    where={"project": self.project_id},
-                    include=["metadatas"]
+                    where={"project": self.project_id}, include=["metadatas"]
                 )
 
                 ids_to_delete = []
 
-                for id_, metadata in zip(all_memories['ids'], all_memories['metadatas']):
+                for id_, metadata in zip(all_memories["ids"], all_memories["metadatas"]):
                     should_delete = False
 
                     # Check older_than
@@ -379,22 +370,22 @@ class MemoryRetriever:
                             "1d": timedelta(days=1),
                             "7d": timedelta(days=7),
                             "30d": timedelta(days=30),
-                            "1y": timedelta(days=365)
+                            "1y": timedelta(days=365),
                         }
                         if older_than in duration_map:
                             cutoff = datetime.now(timezone.utc) - duration_map[older_than]
-                            created = datetime.fromisoformat(metadata.get('created_at', ''))
+                            created = datetime.fromisoformat(metadata.get("created_at", ""))
                             if created < cutoff:
                                 should_delete = True
 
                     # Check tags
                     if tags:
-                        stored_tags = set(metadata.get('tags', '').split(','))
+                        stored_tags = set(metadata.get("tags", "").split(","))
                         if stored_tags.intersection(set(tags)):
                             should_delete = True
 
                     # Check memory_type (if also specified)
-                    if memory_type and metadata.get('memory_type') != memory_type:
+                    if memory_type and metadata.get("memory_type") != memory_type:
                         should_delete = False
 
                     if should_delete:
@@ -409,21 +400,16 @@ class MemoryRetriever:
                 try:
                     # Get IDs first, then delete (ChromaDB requires $and for multiple conditions)
                     to_delete = self.collection.get(
-                        where={
-                            "$and": [
-                                {"memory_type": memory_type},
-                                {"project": self.project_id}
-                            ]
-                        }
+                        where={"$and": [{"memory_type": memory_type}, {"project": self.project_id}]}
                     )
-                    if to_delete['ids']:
-                        self.collection.delete(ids=to_delete['ids'])
-                        deleted = len(to_delete['ids'])
+                    if to_delete["ids"]:
+                        self.collection.delete(ids=to_delete["ids"])
+                        deleted = len(to_delete["ids"])
                 except Exception as e:
                     self._log(f"Delete error: {e}")
 
         # Update stats
-        self.stats['total_memories'] = self.collection.count()
+        self.stats["total_memories"] = self.collection.count()
         self._save_stats()
 
         self._log(f"Forgot {deleted} memories")
@@ -444,34 +430,33 @@ class MemoryRetriever:
 
         # Get all memories for this project
         all_memories = self.collection.get(
-            where={"project": self.project_id},
-            include=["metadatas"]
+            where={"project": self.project_id}, include=["metadatas"]
         )
 
         ids_to_delete = []
 
-        for id_, metadata in zip(all_memories['ids'], all_memories['metadatas']):
-            ttl = metadata.get('ttl', 'permanent')
+        for id_, metadata in zip(all_memories["ids"], all_memories["metadatas"]):
+            ttl = metadata.get("ttl", "permanent")
 
-            if ttl == 'permanent':
+            if ttl == "permanent":
                 continue
 
             duration = TTL_DURATIONS.get(ttl)
             if not duration:
                 continue
 
-            created = datetime.fromisoformat(metadata.get('created_at', now.isoformat()))
+            created = datetime.fromisoformat(metadata.get("created_at", now.isoformat()))
             if now - created > duration:
                 ids_to_delete.append(id_)
-                mem_type = metadata.get('memory_type', 'unknown')
+                mem_type = metadata.get("memory_type", "unknown")
                 cleaned[mem_type] = cleaned.get(mem_type, 0) + 1
 
         if ids_to_delete:
             self.collection.delete(ids=ids_to_delete)
 
         # Update stats
-        self.stats['total_memories'] = self.collection.count()
-        self.stats['last_cleanup'] = now.isoformat()
+        self.stats["total_memories"] = self.collection.count()
+        self.stats["last_cleanup"] = now.isoformat()
         self._save_stats()
 
         total_cleaned = sum(cleaned.values())
@@ -494,22 +479,21 @@ class MemoryRetriever:
         for mem_type in MemoryType:
             try:
                 # ChromaDB requires $and for multiple conditions
-                count = len(self.collection.get(
-                    where={
-                        "$and": [
-                            {"memory_type": mem_type.value},
-                            {"project": self.project_id}
-                        ]
-                    }
-                )['ids'])
+                count = len(
+                    self.collection.get(
+                        where={
+                            "$and": [{"memory_type": mem_type.value}, {"project": self.project_id}]
+                        }
+                    )["ids"]
+                )
                 if count > 0:
                     by_type[mem_type.value] = count
             except Exception:
                 pass
 
         return {
-            'total_memories': total,
-            'by_type': by_type,
-            'project': self.project_id,
-            'last_cleanup': self.stats.get('last_cleanup')
+            "total_memories": total,
+            "by_type": by_type,
+            "project": self.project_id,
+            "last_cleanup": self.stats.get("last_cleanup"),
         }

@@ -47,20 +47,20 @@ from codegrok_mcp.indexing.parallel_indexer import (
 
 __all__ = [
     # Embedding service
-    'EmbeddingService',
-    'get_embedding_service',
-    'reset_embedding_service',
-    'ChromaDBEmbeddingFunction',
-    'embed',
-    'EMBEDDING_MODELS',
-    'DEFAULT_MODEL',
+    "EmbeddingService",
+    "get_embedding_service",
+    "reset_embedding_service",
+    "ChromaDBEmbeddingFunction",
+    "embed",
+    "EMBEDDING_MODELS",
+    "DEFAULT_MODEL",
     # Source retriever
-    'SourceRetriever',
-    'CodeChunk',
-    'SUPPORTED_EXTENSIONS',
-    'count_codebase_files',
+    "SourceRetriever",
+    "CodeChunk",
+    "SUPPORTED_EXTENSIONS",
+    "count_codebase_files",
     # Parallel indexing
-    'parallel_parse_files',
-    'ParseResult',
-    'ParallelProgress',
+    "parallel_parse_files",
+    "ParseResult",
+    "ParallelProgress",
 ]

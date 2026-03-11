@@ -1,4 +1,5 @@
 """Main application module."""
+
 from typing import List, Optional
 
 

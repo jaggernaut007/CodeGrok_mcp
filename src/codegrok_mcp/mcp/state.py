@@ -1,4 +1,5 @@
 """Session state management for MCP server."""
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
@@ -11,6 +12,7 @@ if TYPE_CHECKING:
 @dataclass
 class MCPSessionState:
     """Singleton state for MCP server session."""
+
     retriever: Optional["SourceRetriever"] = None
     memory_retriever: Optional["MemoryRetriever"] = None
     codebase_path: Optional[Path] = None

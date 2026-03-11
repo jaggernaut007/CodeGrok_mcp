@@ -29,11 +29,15 @@ Usage:
 """
 
 import json
+import logging
+import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from dataclasses import dataclass
+
+import pathspec
 
 try:
     import chromadb
@@ -47,26 +51,59 @@ from codegrok_mcp.parsers.treesitter_parser import TreeSitterParser
 from codegrok_mcp.parsers.language_configs import get_supported_extensions, get_language_for_file
 from codegrok_mcp.core.models import Symbol, SymbolType
 
-
 # Derived from authoritative EXTENSION_MAP in language_configs.py (30+ extensions, 9 languages)
 # This eliminates duplication and ensures extensions stay in sync
 SUPPORTED_EXTENSIONS = list(get_supported_extensions())
 SUPPORTED_EXTENSIONS_SET = set(SUPPORTED_EXTENSIONS)  # For O(1) lookup
 
 # Common directories to skip during file discovery
-SKIP_DIRS = {'.git', 'node_modules', '__pycache__', '.codegrok', 'venv', '.venv',
-             '.tox', '.mypy_cache', '.pytest_cache', 'dist', 'build', '.eggs'}
+SKIP_DIRS = {
+    ".git",
+    "node_modules",
+    "__pycache__",
+    ".codegrok",
+    "venv",
+    ".venv",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    "dist",
+    "build",
+    ".eggs",
+}
 
 
-def discover_files(codebase_path: Path, extensions: set = None) -> List[Path]:
-    """Single-pass file discovery with extension filtering.
+def _load_gitignore(directory: Path) -> Optional[pathspec.PathSpec]:
+    """Load a .gitignore file from a directory, returning a PathSpec or None."""
+    gitignore_path = directory / ".gitignore"
+    if gitignore_path.is_file():
+        try:
+            with open(gitignore_path, "r", encoding="utf-8", errors="ignore") as f:
+                return pathspec.PathSpec.from_lines("gitignore", f)
+        except (OSError, IOError):
+            pass
+    return None
 
-    This is 30x+ faster than calling rglob() once per extension because it
-    traverses the directory tree only once instead of 30+ times.
+
+def discover_files(
+    codebase_path: Path,
+    extensions: set = None,
+    respect_gitignore: bool = True,
+    max_files: int = 200_000,
+    progress_callback: Callable = None,
+) -> List[Path]:
+    """Single-pass file discovery with extension filtering and .gitignore support.
+
+    Uses os.walk() to traverse the directory tree once, pruning ignored
+    directories in-place so they are never descended into. Respects .gitignore
+    patterns (including nested .gitignore files) and a hardcoded SKIP_DIRS set.
 
     Args:
         codebase_path: Path to the codebase root directory.
-        extensions: Set of extensions to include (default: SUPPORTED_EXTENSIONS_SET)
+        extensions: Set of extensions to include (default: SUPPORTED_EXTENSIONS_SET).
+        respect_gitignore: Whether to respect .gitignore patterns (default: True).
+        max_files: Safety limit on number of files to discover (default: 200,000).
+        progress_callback: Optional callback(event_type, data) for progress events.
 
     Returns:
         List of file paths matching the extensions.
@@ -74,14 +111,90 @@ def discover_files(codebase_path: Path, extensions: set = None) -> List[Path]:
     if extensions is None:
         extensions = SUPPORTED_EXTENSIONS_SET
 
-    files = []
-    for path in codebase_path.rglob("*"):
-        # Skip directories in SKIP_DIRS
-        if any(skip_dir in path.parts for skip_dir in SKIP_DIRS):
-            continue
-        if path.is_file() and path.suffix in extensions:
-            files.append(path)
+    # Load root .gitignore
+    gitignore_specs: List[pathspec.PathSpec] = []
+    if respect_gitignore:
+        root_spec = _load_gitignore(codebase_path)
+        if root_spec is not None:
+            gitignore_specs.append(root_spec)
+
+    files: List[Path] = []
+    codebase_str = str(codebase_path)
+
+    for dirpath_str, dirnames, filenames in os.walk(codebase_path, followlinks=False):
+        dirpath = Path(dirpath_str)
+
+        # Load nested .gitignore for this directory (not root)
+        if respect_gitignore and dirpath != codebase_path:
+            nested_spec = _load_gitignore(dirpath)
+            if nested_spec is not None:
+                gitignore_specs.append(nested_spec)
+
+        # Prune directories in-place: remove SKIP_DIRS and gitignored dirs
+        filtered_dirs = []
+        for d in dirnames:
+            if d in SKIP_DIRS:
+                continue
+            if respect_gitignore and gitignore_specs:
+                # Compute relative path with trailing slash for directory matching
+                rel_dir = str((dirpath / d).relative_to(codebase_path)) + "/"
+                if any(spec.match_file(rel_dir) for spec in gitignore_specs):
+                    continue
+            filtered_dirs.append(d)
+        dirnames[:] = filtered_dirs
+
+        # Check files
+        for filename in filenames:
+            filepath = dirpath / filename
+            if filepath.suffix not in extensions:
+                continue
+            if respect_gitignore and gitignore_specs:
+                rel_path = str(filepath.relative_to(codebase_path))
+                if any(spec.match_file(rel_path) for spec in gitignore_specs):
+                    continue
+            files.append(filepath)
+
+            # Report progress every 1000 files
+            if progress_callback and len(files) % 1000 == 0:
+                progress_callback("discovery_progress", {"files_found": len(files)})
+
+            # Safety limit
+            if len(files) >= max_files:
+                logging.warning(
+                    f"discover_files: reached max_files limit ({max_files}). "
+                    f"Stopping discovery. Consider using .gitignore to exclude files."
+                )
+                return files
+
     return files
+
+
+def _save_checkpoint(checkpoint_path: Path, chunks_completed: int, total_chunks: int) -> None:
+    """Atomically save a checkpoint file for resumable indexing."""
+    data = {
+        "chunks_completed": chunks_completed,
+        "total_chunks": total_chunks,
+        "timestamp": datetime.now().isoformat(),
+    }
+    tmp_path = checkpoint_path.with_suffix(".tmp")
+    try:
+        with open(tmp_path, "w") as f:
+            json.dump(data, f)
+        os.replace(str(tmp_path), str(checkpoint_path))
+    except OSError:
+        # Best-effort: if we can't save checkpoint, indexing still continues
+        pass
+
+
+def _load_checkpoint(checkpoint_path: Path) -> Optional[Dict[str, Any]]:
+    """Load a checkpoint file, returning the data dict or None."""
+    if checkpoint_path is None or not checkpoint_path.exists():
+        return None
+    try:
+        with open(checkpoint_path, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def count_codebase_files(codebase_path: Path) -> int:
@@ -99,6 +212,7 @@ def count_codebase_files(codebase_path: Path) -> int:
 @dataclass
 class CodeChunk:
     """A chunk of code suitable for embedding."""
+
     id: str
     text: str
     filepath: str
@@ -127,14 +241,12 @@ class SourceRetriever:
         collection_name: str = "codebase",
         verbose: bool = True,
         persist_path: Optional[str] = None,
-
         # Parallel indexing options (3-5x faster for large codebases)
         parallel: bool = True,  # Enabled by default for better performance
         max_workers: Optional[int] = None,
-
         # Dependency injection for testability
-        parser: Optional['TreeSitterParser'] = None,
-        embedding_service: Optional['EmbeddingService'] = None
+        parser: Optional["TreeSitterParser"] = None,
+        embedding_service: Optional["EmbeddingService"] = None,
     ):
         """
         Initialize the source retriever.
@@ -165,8 +277,7 @@ class SourceRetriever:
         # Initialize embedding service (use injected or create default)
         self._log(f"Using native embedding: {embedding_model}")
         self.embedding_service = embedding_service or get_embedding_service(
-            embedding_model,
-            show_progress=verbose  # Only show tqdm progress bar if verbose
+            embedding_model, show_progress=verbose  # Only show tqdm progress bar if verbose
         )
 
         # Initialize ChromaDB (persistent or in-memory)
@@ -182,11 +293,11 @@ class SourceRetriever:
 
         # Statistics
         self.stats = {
-            'total_files': 0,
-            'total_symbols': 0,
-            'total_chunks': 0,
-            'parse_errors': 0,
-            'indexing_time': 0.0
+            "total_files": 0,
+            "total_symbols": 0,
+            "total_chunks": 0,
+            "parse_errors": 0,
+            "indexing_time": 0.0,
         }
 
         # Metadata storage for incremental reindexing (file modification times)
@@ -276,20 +387,20 @@ class SourceRetriever:
             symbol_type=symbol.type.value,
             line_start=symbol.line_start,
             metadata={
-                'filepath': symbol.filepath,
-                'name': symbol.name,
-                'type': symbol.type.value,
-                'line': symbol.line_start,
-                'signature': symbol.signature,
-                'parent': symbol.parent or "",
-                'language': language  # NEW: enables language filtering in search
-            }
+                "filepath": symbol.filepath,
+                "name": symbol.name,
+                "type": symbol.type.value,
+                "line": symbol.line_start,
+                "signature": symbol.signature,
+                "parent": symbol.parent or "",
+                "language": language,  # NEW: enables language filtering in search
+            },
         )
 
     def index_codebase(
         self,
         file_extensions: Optional[List[str]] = None,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
     ):
         """
         Index the entire codebase.
@@ -323,9 +434,9 @@ class SourceRetriever:
 
         # Legacy logging for when no callback provided
         if not progress_callback:
-            self._log("\n" + "="*80)
+            self._log("\n" + "=" * 80)
             self._log("INDEXING CODEBASE")
-            self._log("="*80)
+            self._log("=" * 80)
             self._log(f"Codebase: {self.codebase_path}")
             self._log(f"Extensions: {file_extensions}")
             self._log(f"Embedding model: {self.embedding_model}")
@@ -337,9 +448,11 @@ class SourceRetriever:
             self._log("\nStep 1: Finding files...")
 
         extensions_set = set(file_extensions)
-        all_files = discover_files(self.codebase_path, extensions_set)
+        all_files = discover_files(
+            self.codebase_path, extensions_set, progress_callback=progress_callback
+        )
 
-        self.stats['total_files'] = len(all_files)
+        self.stats["total_files"] = len(all_files)
 
         # Store file modification times for incremental reindexing
         file_mtimes = {}
@@ -348,12 +461,9 @@ class SourceRetriever:
                 file_mtimes[str(filepath)] = filepath.stat().st_mtime
             except OSError:
                 pass  # Skip files that can't be stat'd
-        self._metadata['file_mtimes'] = file_mtimes
+        self._metadata["file_mtimes"] = file_mtimes
 
-        emit("files_found", {
-            "files": all_files,
-            "codebase_path": self.codebase_path
-        })
+        emit("files_found", {"files": all_files, "codebase_path": self.codebase_path})
 
         if not progress_callback:
             self._log(f"Found {len(all_files)} files")
@@ -366,7 +476,9 @@ class SourceRetriever:
         all_symbols = []
 
         # Use parallel parsing if enabled and there are enough files
-        use_parallel = self.parallel and len(all_files) > 50  # Threshold increased for small projects
+        use_parallel = (
+            self.parallel and len(all_files) > 50
+        )  # Threshold increased for small projects
         if use_parallel:
             # Parallel parsing (3-5x faster for large codebases)
             from codegrok_mcp.indexing.parallel_indexer import parallel_parse_files
@@ -375,11 +487,9 @@ class SourceRetriever:
                 self._log(f"  Using parallel parsing with {self.max_workers or 'auto'} workers...")
 
             all_symbols, parse_errors = parallel_parse_files(
-                files=all_files,
-                max_workers=self.max_workers,
-                progress_callback=progress_callback
+                files=all_files, max_workers=self.max_workers, progress_callback=progress_callback
             )
-            self.stats['parse_errors'] = parse_errors
+            self.stats["parse_errors"] = parse_errors
         else:
             # Sequential parsing (original code)
             for i, filepath in enumerate(all_files, 1):
@@ -389,23 +499,26 @@ class SourceRetriever:
                     all_symbols.extend(parsed.symbols)
                     symbols_count = len(parsed.symbols)
 
-                    emit("file_parsed", {
-                        "path": str(filepath),
-                        "symbols": symbols_count,
-                        "index": i,
-                        "total": len(all_files)
-                    })
+                    emit(
+                        "file_parsed",
+                        {
+                            "path": str(filepath),
+                            "symbols": symbols_count,
+                            "index": i,
+                            "total": len(all_files),
+                        },
+                    )
                 except Exception as e:
-                    self.stats['parse_errors'] += 1
+                    self.stats["parse_errors"] += 1
                     emit("parse_error", {"path": str(filepath), "error": str(e)})
-                    if not progress_callback and self.verbose and self.stats['parse_errors'] <= 5:
+                    if not progress_callback and self.verbose and self.stats["parse_errors"] <= 5:
                         self._log(f"  Error parsing {filepath}: {e}")
 
                 # Legacy progress for no callback
                 if not progress_callback and self.verbose and i % 100 == 0:
-                    print(f"  Parsed {i}/{len(all_files)} files...", end='\r')
+                    print(f"  Parsed {i}/{len(all_files)} files...", end="\r")
 
-        self.stats['total_symbols'] = len(all_symbols)
+        self.stats["total_symbols"] = len(all_symbols)
         if not progress_callback:
             self._log(f"\nParsed {len(all_symbols):,} symbols from {len(all_files)} files")
 
@@ -414,28 +527,26 @@ class SourceRetriever:
             self._log("\nStep 3: Creating chunks...")
 
         chunks = [self._create_chunk(symbol) for symbol in all_symbols]
-        self.stats['total_chunks'] = len(chunks)
+        self.stats["total_chunks"] = len(chunks)
 
         emit("chunks_created", {"total": len(chunks)})
 
         if not progress_callback:
             self._log(f"Created {len(chunks):,} chunks")
 
-        # Step 4: Create ChromaDB collection
+        # Step 4: Get or create ChromaDB collection (supports resumption)
         if not progress_callback:
             self._log("\nStep 4: Creating vector database...")
 
-        try:
-            self.chroma_client.delete_collection(self.collection_name)
-        except Exception:
-            pass  # Collection doesn't exist yet - this is expected
-
-        self.collection = self.chroma_client.create_collection(
+        self.collection = self.chroma_client.get_or_create_collection(
             name=self.collection_name,
-            metadata={"description": f"Code embeddings for {self.codebase_path.name}"}
+            metadata={"description": f"Code embeddings for {self.codebase_path.name}"},
         )
 
-        # Step 5: Generate embeddings and store
+        # Track new chunk IDs for stale chunk cleanup after embedding
+        new_chunk_ids = set(chunk.id for chunk in chunks)
+
+        # Step 5: Generate embeddings and store (with checkpointing)
         eta_minutes = len(chunks) / 50 / 60  # ~50 embeddings/sec native
 
         emit("embedding_start", {"total": len(chunks), "eta_minutes": eta_minutes})
@@ -444,18 +555,33 @@ class SourceRetriever:
             self._log(f"\nStep 5: Generating embeddings (ETA: ~{eta_minutes:.1f} minutes)...")
             self._log("(You can interrupt and resume later)")
 
+        # Load checkpoint if available (resume from interrupted indexing)
+        checkpoint_path = (
+            Path(self.persist_path).parent / "checkpoint.json" if self.persist_path else None
+        )
+        start_chunk_idx = 0
+        if checkpoint_path:
+            checkpoint = _load_checkpoint(checkpoint_path)
+            if checkpoint and checkpoint.get("total_chunks") == len(chunks):
+                resume_idx = checkpoint.get("chunks_completed", 0)
+                if self.collection.count() >= resume_idx:
+                    start_chunk_idx = resume_idx
+                    if not progress_callback:
+                        self._log(f"  Resuming from chunk {start_chunk_idx} (checkpoint found)")
+
         batch_size = 100
         embedding_start_time = time.time()
         chunks_per_second = None  # Will be calibrated after first batch
 
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i:i + batch_size]
+        for i in range(start_chunk_idx, len(chunks), batch_size):
+            batch = chunks[i : i + batch_size]
             current_count = i + len(batch)
             elapsed = time.time() - embedding_start_time
 
             # Calibrate speed after first batch, then update continuously
-            if elapsed > 0 and current_count > 0:
-                chunks_per_second = current_count / elapsed
+            chunks_processed = current_count - start_chunk_idx
+            if elapsed > 0 and chunks_processed > 0:
+                chunks_per_second = chunks_processed / elapsed
 
             # Calculate remaining time estimate
             remaining_seconds = None
@@ -463,22 +589,28 @@ class SourceRetriever:
                 remaining_chunks = len(chunks) - current_count
                 remaining_seconds = remaining_chunks / chunks_per_second
 
-            emit("embedding_progress", {
-                "current": current_count,
-                "total": len(chunks),
-                "elapsed_seconds": elapsed,
-                "remaining_seconds": remaining_seconds,
-                "chunks_per_second": chunks_per_second
-            })
+            emit(
+                "embedding_progress",
+                {
+                    "current": current_count,
+                    "total": len(chunks),
+                    "elapsed_seconds": elapsed,
+                    "remaining_seconds": remaining_seconds,
+                    "chunks_per_second": chunks_per_second,
+                },
+            )
 
             # Legacy progress for no callback
             if not progress_callback and self.verbose and i % 500 == 0:
                 elapsed = time.time() - start_time
                 rate = i / elapsed if elapsed > 0 else 0
                 remaining = (len(chunks) - i) / rate if rate > 0 else 0
-                print(f"  Embedded {i:,}/{len(chunks):,} chunks "
-                      f"({i/len(chunks)*100:.1f}%) "
-                      f"- ETA: {remaining/60:.1f}m", end='\r')
+                print(
+                    f"  Embedded {i:,}/{len(chunks):,} chunks "
+                    f"({i/len(chunks)*100:.1f}%) "
+                    f"- ETA: {remaining/60:.1f}m",
+                    end="\r",
+                )
 
             try:
                 # Generate embeddings for batch
@@ -487,41 +619,66 @@ class SourceRetriever:
                 # Native batch embedding (10-20x faster)
                 embeddings = self.embedding_service.embed_batch(texts)
 
-                # Add to ChromaDB
-                self.collection.add(
+                # Upsert to ChromaDB (idempotent - safe for resumption)
+                self.collection.upsert(
                     ids=[chunk.id for chunk in batch],
                     embeddings=embeddings,
                     documents=[chunk.text for chunk in batch],
-                    metadatas=[chunk.metadata for chunk in batch]
+                    metadatas=[chunk.metadata for chunk in batch],
                 )
             except Exception as e:
                 if not progress_callback:
                     self._log(f"\n  Error embedding batch {i}: {e}")
                 continue
 
-        self.stats['indexing_time'] = time.time() - start_time
+            # Save checkpoint every 1000 chunks
+            if checkpoint_path and current_count % 1000 == 0:
+                _save_checkpoint(checkpoint_path, current_count, len(chunks))
+
+        # Remove stale chunks (from deleted/renamed files)
+        try:
+            existing = self.collection.get(include=[])
+            existing_ids = set(existing["ids"])
+            stale_ids = list(existing_ids - new_chunk_ids)
+            if stale_ids:
+                # ChromaDB delete supports batching
+                for j in range(0, len(stale_ids), 500):
+                    self.collection.delete(ids=stale_ids[j : j + 500])
+                if not progress_callback:
+                    self._log(f"  Removed {len(stale_ids)} stale chunks")
+        except Exception as e:
+            if not progress_callback:
+                self._log(f"  Warning: Could not clean stale chunks: {e}")
+
+        # Clean up checkpoint on success
+        if checkpoint_path and checkpoint_path.exists():
+            checkpoint_path.unlink()
+
+        self.stats["indexing_time"] = time.time() - start_time
 
         emit("complete", {"stats": self.stats.copy()})
 
         # Legacy summary for no callback
         if not progress_callback:
-            self._log("\n\n" + "="*80)
+            self._log("\n\n" + "=" * 80)
             self._log("INDEXING COMPLETE")
-            self._log("="*80)
+            self._log("=" * 80)
             self._log(f"Files parsed:      {self.stats['total_files']:,}")
             self._log(f"Symbols extracted: {self.stats['total_symbols']:,}")
             self._log(f"Chunks created:    {self.stats['total_chunks']:,}")
             self._log(f"Parse errors:      {self.stats['parse_errors']}")
-            self._log(f"Time elapsed:      {self.stats['indexing_time']:.1f}s ({self.stats['indexing_time']/60:.1f}m)")
+            self._log(
+                f"Time elapsed:      {self.stats['indexing_time']:.1f}s ({self.stats['indexing_time']/60:.1f}m)"
+            )
             self._log(f"Ready for retrieval!")
-            self._log("="*80 + "\n")
+            self._log("=" * 80 + "\n")
 
     def get_sources_for_question(
         self,
         question: str,
         n_results: int = 10,
         language: Optional[str] = None,
-        symbol_type: Optional[str] = None
+        symbol_type: Optional[str] = None,
     ) -> tuple[List[Dict[str, Any]], List[str]]:
         """
         Get source references and documents for a question.
@@ -556,18 +713,16 @@ class SourceRetriever:
 
         # Search ChromaDB
         results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=n_results,
-            where=where_filter
+            query_embeddings=[query_embedding], n_results=n_results, where=where_filter
         )
 
-        documents = results['documents'][0]
-        metadatas = results['metadatas'][0]
+        documents = results["documents"][0]
+        metadatas = results["metadatas"][0]
 
         # Format sources for display
         sources = []
         for metadata in metadatas:
-            filepath = metadata['filepath']
+            filepath = metadata["filepath"]
             try:
                 filepath = str(Path(filepath).relative_to(self.codebase_path))
             except ValueError:
@@ -577,10 +732,7 @@ class SourceRetriever:
         # Build document list with metadata
         doc_results = []
         for doc, metadata in zip(documents, metadatas):
-            doc_results.append({
-                'text': doc,
-                'metadata': metadata
-            })
+            doc_results.append({"text": doc, "metadata": metadata})
 
         return doc_results, sources
 
@@ -600,9 +752,7 @@ class SourceRetriever:
             return False
 
         try:
-            self.collection = self.chroma_client.get_collection(
-                name=self.collection_name
-            )
+            self.collection = self.chroma_client.get_collection(name=self.collection_name)
             count = self.collection.count()
             self._log(f"Loaded existing index with {count:,} chunks")
             return True
@@ -618,14 +768,14 @@ class SourceRetriever:
             metadata_path: Path to save metadata JSON
         """
         metadata = {
-            'codebase_path': str(self.codebase_path),
-            'embedding_model': self.embedding_model,
-            'collection_name': self.collection_name,
-            'indexed_at': datetime.now().isoformat(),
-            'stats': self.stats,
-            'file_mtimes': self._metadata.get('file_mtimes', {})
+            "codebase_path": str(self.codebase_path),
+            "embedding_model": self.embedding_model,
+            "collection_name": self.collection_name,
+            "indexed_at": datetime.now().isoformat(),
+            "stats": self.stats,
+            "file_mtimes": self._metadata.get("file_mtimes", {}),
         }
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
         self._log(f"Metadata saved to {metadata_path}")
 
@@ -640,14 +790,14 @@ class SourceRetriever:
             Metadata dictionary or None if not found
         """
         try:
-            with open(metadata_path, 'r') as f:
+            with open(metadata_path, "r") as f:
                 metadata = json.load(f)
             # Restore stats
-            if 'stats' in metadata:
-                self.stats = metadata['stats']
+            if "stats" in metadata:
+                self.stats = metadata["stats"]
             # Restore file modification times for incremental reindexing
-            if 'file_mtimes' in metadata:
-                self._metadata['file_mtimes'] = metadata['file_mtimes']
+            if "file_mtimes" in metadata:
+                self._metadata["file_mtimes"] = metadata["file_mtimes"]
             return metadata
         except FileNotFoundError:
             return None
@@ -655,7 +805,7 @@ class SourceRetriever:
     def incremental_reindex(
         self,
         file_extensions: Optional[List[str]] = None,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
     ) -> Dict[str, Any]:
         """
         Re-index only files that changed since last indexing.
@@ -695,7 +845,7 @@ class SourceRetriever:
         extensions = file_extensions or SUPPORTED_EXTENSIONS
 
         # 1. Get stored file_mtimes from metadata
-        stored_mtimes = self._metadata.get('file_mtimes', {})
+        stored_mtimes = self._metadata.get("file_mtimes", {})
 
         # 2. Scan current files and collect modification times (single-pass - 30x faster)
         extensions_set = set(extensions)
@@ -715,21 +865,21 @@ class SourceRetriever:
         new_files = current_paths - stored_paths
         deleted_files = stored_paths - current_paths
         modified_files = {
-            p for p in (current_paths & stored_paths)
-            if current_files[p] > stored_mtimes.get(p, 0)
+            p for p in (current_paths & stored_paths) if current_files[p] > stored_mtimes.get(p, 0)
         }
 
         files_to_reindex = new_files | modified_files
         files_to_remove = deleted_files | modified_files
 
         # Emit changes detected event
-        emit("changes_detected", {
-            "new": len(new_files),
-            "modified": len(modified_files),
-            "deleted": len(deleted_files)
-        })
+        emit(
+            "changes_detected",
+            {"new": len(new_files), "modified": len(modified_files), "deleted": len(deleted_files)},
+        )
 
-        self._log(f"Incremental reindex: {len(new_files)} new, {len(modified_files)} modified, {len(deleted_files)} deleted")
+        self._log(
+            f"Incremental reindex: {len(new_files)} new, {len(modified_files)} modified, {len(deleted_files)} deleted"
+        )
 
         chunks_removed = 0
         chunks_added = 0
@@ -776,16 +926,16 @@ class SourceRetriever:
                     ids=[chunk.id for chunk in chunks],
                     embeddings=embeddings,
                     documents=[chunk.text for chunk in chunks],
-                    metadatas=[chunk.metadata for chunk in chunks]
+                    metadatas=[chunk.metadata for chunk in chunks],
                 )
                 chunks_added = len(chunks)
 
         # 6. Update metadata with new file modification times
-        self._metadata['file_mtimes'] = current_files
+        self._metadata["file_mtimes"] = current_files
 
         # Persist metadata if we have a persist path
         if self.persist_path:
-            metadata_path = Path(self.persist_path).parent / 'metadata.json'
+            metadata_path = Path(self.persist_path).parent / "metadata.json"
             self.save_metadata(str(metadata_path))
 
         elapsed_time = round(time.time() - start_time, 2)
@@ -796,13 +946,15 @@ class SourceRetriever:
             "files_deleted": len(deleted_files),
             "chunks_added": chunks_added,
             "chunks_removed": chunks_removed,
-            "time_seconds": elapsed_time
+            "time_seconds": elapsed_time,
         }
 
         # Emit complete event
         emit("complete", {"chunks_added": chunks_added})
 
-        self._log(f"Incremental reindex complete in {elapsed_time}s: "
-                  f"+{chunks_added} chunks, -{chunks_removed} files processed")
+        self._log(
+            f"Incremental reindex complete in {elapsed_time}s: "
+            f"+{chunks_added} chunks, -{chunks_removed} files processed"
+        )
 
         return result

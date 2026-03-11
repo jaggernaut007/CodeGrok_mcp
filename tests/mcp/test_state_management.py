@@ -1,10 +1,9 @@
 """Test state management for isolation between tests and calls."""
+
 import asyncio
 import pytest
 from pathlib import Path
-from codegrok_mcp.mcp.state import (
-    get_state, reset_state, MCPSessionState
-)
+from codegrok_mcp.mcp.state import get_state, reset_state, MCPSessionState
 from codegrok_mcp.mcp.server import learn as learn_tool
 
 # Access underlying function from FastMCP FunctionTool wrapper

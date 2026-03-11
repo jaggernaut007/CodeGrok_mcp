@@ -42,7 +42,7 @@ src/codegrok_mcp/
 - **Embedding Model**: `nomic-ai/CodeRankEmbed` (768 dims, 8192 max tokens)
 - **Chunk Strategy**: Symbol-based (each function/class/method = 1 chunk)
 - **Max Chunk Size**: 4000 chars (~1000-1300 tokens)
-- **Storage**: `.codegrok/` (chromadb/ + metadata.json + memory_metadata.json)
+- **Storage**: `.codegrok/` (chromadb/ + metadata.json + memory_metadata.json + checkpoint.json)
 - **Parallelism**: CPU count - 1 workers (min 1, max 32)
 - **Memory TTLs**: session (24h), day, week, month, permanent
 
@@ -59,13 +59,17 @@ mypy src/                 # Type check
 ## Gotchas
 
 1. **State is global singleton** - `state.py` holds SourceRetriever + MemoryRetriever across MCP calls
-2. **Incremental reindex uses SHA256** - File hash comparison, not mtime
+2. **Incremental reindex uses mtime** - File modification time comparison for change detection
 3. **ChromaDB collections**: `codebase_chunks` (code) and `memories` (memory layer)
 4. **No LLM code** - Removed from parent CodeGrok; source_retriever.py has no ask/rerank methods
 5. **Tree-sitter node names vary by language** - language_configs.py normalizes them
 6. **Embedding is cached** - LRU(1000) + batch processing in embedding_service.py
 7. **Memory tags stored as CSV** - ChromaDB doesn't support list metadata; tags joined with commas
 8. **All tools require `learn` first** - Except `list_supported_languages` (static data)
+9. **discover_files respects .gitignore** - Uses `pathspec` + `os.walk()` with directory pruning; also respects nested `.gitignore` files
+10. **Indexing uses upsert** - `collection.upsert()` instead of delete-recreate; stale chunks cleaned after embedding
+11. **Checkpointing** - `.codegrok/checkpoint.json` saves progress every 1000 chunks; atomic writes via `os.replace()`; deleted on success
+12. **max_files safety limit** - `discover_files()` stops at 200K files to prevent DoS (addresses SECURITY_REVIEW HIGH-003)
 
 ## Adding Languages
 

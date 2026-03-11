@@ -19,6 +19,7 @@ class CodeGrokException(Exception):
     All custom exceptions in CodeGrok inherit from this class,
     allowing for broad exception catching when needed.
     """
+
     pass
 
 
@@ -46,6 +47,7 @@ class IndexingError(CodeGrokException):
     - Chunking failures
     - ChromaDB storage errors
     """
+
     pass
 
 
@@ -57,6 +59,7 @@ class EmbeddingError(CodeGrokException):
     - Encoding errors
     - Memory issues
     """
+
     pass
 
 
@@ -68,6 +71,7 @@ class SearchError(CodeGrokException):
     - Missing index
     - Invalid query parameters
     """
+
     pass
 
 
@@ -79,4 +83,5 @@ class ConfigurationError(CodeGrokException):
     - Invalid file paths
     - Missing required parameters
     """
+
     pass

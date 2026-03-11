@@ -27,6 +27,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from codegrok_mcp.mcp.state import get_state
+
 # Lazy import SourceRetriever to avoid heavy startup cost
 # from codegrok_mcp.indexing.source_retriever import SourceRetriever, SUPPORTED_EXTENSIONS
 from codegrok_mcp.parsers.language_configs import EXTENSION_MAP
@@ -36,9 +37,9 @@ SUPPORTED_EXTENSIONS = sorted(list(EXTENSION_MAP.keys()))
 
 
 # Storage constants (same as CLI)
-CODEGROK_DIR = '.codegrok'
-CHROMA_DIR = 'chroma'
-METADATA_FILE = 'metadata.json'
+CODEGROK_DIR = ".codegrok"
+CHROMA_DIR = "chroma"
+METADATA_FILE = "metadata.json"
 
 # Initialize FastMCP server
 mcp = FastMCP(
@@ -69,7 +70,7 @@ TYPICAL WORKFLOW:
 1. learn(path="/project") - Index codebase (required first step)
 2. recall("user preferences") - Check existing context
 3. remember("Decision: Using Redis for caching", memory_type="decision")
-4. get_sources("authentication flow") - Find relevant code"""
+4. get_sources("authentication flow") - Find relevant code""",
 )
 
 
@@ -77,28 +78,32 @@ def _get_codegrok_paths(codebase_path: Path) -> Dict[str, Path]:
     """Get paths to .codegrok storage locations."""
     codegrok_dir = codebase_path / CODEGROK_DIR
     return {
-        'codegrok_dir': codegrok_dir,
-        'chroma_path': codegrok_dir / CHROMA_DIR,
-        'metadata_path': codegrok_dir / METADATA_FILE,
+        "codegrok_dir": codegrok_dir,
+        "chroma_path": codegrok_dir / CHROMA_DIR,
+        "metadata_path": codegrok_dir / METADATA_FILE,
     }
 
 
 def _has_valid_index(paths: Dict[str, Path]) -> bool:
     """Check if a valid CodeGrok index exists at the given paths."""
     return (
-        paths['codegrok_dir'].exists() and
-        paths['metadata_path'].exists() and
-        paths['chroma_path'].exists()
+        paths["codegrok_dir"].exists()
+        and paths["metadata_path"].exists()
+        and paths["chroma_path"].exists()
     )
 
 
 def _create_learn_progress_callback(ctx: Context, loop) -> Callable:
     """Create a progress callback that reports indexing progress to MCP client."""
+
     def callback(event_type: str, data: dict):
         progress = 0
         message = ""
 
-        if event_type == "files_found":
+        if event_type == "discovery_progress":
+            progress = min(4, int(data.get("files_found", 0) / 1000))
+            message = f"Discovering files... ({data.get('files_found', 0)} found)"
+        elif event_type == "files_found":
             progress = 5
             message = f"Found {len(data['files'])} files..."
         elif event_type == "parsing_start":
@@ -112,23 +117,31 @@ def _create_learn_progress_callback(ctx: Context, loop) -> Callable:
             message = f"Generating embeddings for {data['total']} chunks..."
         elif event_type == "embedding_progress":
             # Scale embedding progress (35-95%)
-            pct = data['current'] / data['total'] if data['total'] > 0 else 1
+            pct = data["current"] / data["total"] if data["total"] > 0 else 1
             progress = 35 + int(pct * 60)
-            message = f"Embedding... ({data['current']}/{data['total']} chunks)"
+            remaining = data.get("remaining_seconds")
+            if remaining and remaining > 0:
+                eta_str = (
+                    f", ~{remaining / 60:.1f}m remaining"
+                    if remaining >= 60
+                    else f", ~{remaining:.0f}s remaining"
+                )
+            else:
+                eta_str = ""
+            message = f"Embedding... ({data['current']}/{data['total']} chunks{eta_str})"
         elif event_type == "complete":
             progress = 100
             message = "Indexing complete!"
 
         if progress > 0:
-            asyncio.run_coroutine_threadsafe(
-                ctx.report_progress(progress, 100, message),
-                loop
-            )
+            asyncio.run_coroutine_threadsafe(ctx.report_progress(progress, 100, message), loop)
+
     return callback
 
 
 def _create_relearn_progress_callback(ctx: Context, loop) -> Callable:
     """Create a progress callback that reports reindexing progress to MCP client."""
+
     def callback(event_type: str, data: dict):
         progress = 0
         message = ""
@@ -147,10 +160,8 @@ def _create_relearn_progress_callback(ctx: Context, loop) -> Callable:
             message = "Re-indexing complete!"
 
         if progress > 0:
-            asyncio.run_coroutine_threadsafe(
-                ctx.report_progress(progress, 100, message),
-                loop
-            )
+            asyncio.run_coroutine_threadsafe(ctx.report_progress(progress, 100, message), loop)
+
     return callback
 
 
@@ -165,27 +176,30 @@ Modes:
 
 Creates a .codegrok/ folder in the codebase directory.""",
     annotations=ToolAnnotations(
-        readOnlyHint=False,     # Creates/modifies .codegrok/ directory
+        readOnlyHint=False,  # Creates/modifies .codegrok/ directory
         destructiveHint=False,  # Doesn't destroy user data (only index data)
-        idempotentHint=True,    # Safe to re-run on same path
-        openWorldHint=False     # Only accesses local filesystem
-    )
+        idempotentHint=True,  # Safe to re-run on same path
+        openWorldHint=False,  # Only accesses local filesystem
+    ),
 )
 async def learn(
     path: Annotated[str, Field(description="Absolute path to the codebase directory to index")],
     mode: Annotated[
         str,
-        Field(description="Indexing mode: 'auto' (smart detection), 'full' (force re-index), 'load_only' (just load)")
+        Field(
+            description="Indexing mode: 'auto' (smart detection), 'full' (force re-index), 'load_only' (just load)"
+        ),
     ] = "auto",
     file_extensions: Annotated[
         Optional[List[str]],
-        Field(description="Optional list of file extensions to include (e.g., ['.py', '.js']). Defaults to all supported extensions.")
+        Field(
+            description="Optional list of file extensions to include (e.g., ['.py', '.js']). Defaults to all supported extensions."
+        ),
     ] = None,
     embedding_model: Annotated[
-        str,
-        Field(description="Embedding model to use (default: coderankembed)")
+        str, Field(description="Embedding model to use (default: coderankembed)")
     ] = "coderankembed",
-    ctx: Context = None
+    ctx: Context = None,
 ) -> Dict[str, Any]:
     """Index a codebase with smart mode detection."""
     state = get_state()
@@ -224,10 +238,7 @@ async def learn(
 
 
 async def _load_existing_index(
-    codebase_path: Path,
-    paths: Dict[str, Path],
-    state,
-    embedding_model: str
+    codebase_path: Path, paths: Dict[str, Path], state, embedding_model: str
 ) -> Dict[str, Any]:
     """Load an existing index without any reindexing."""
     from codegrok_mcp.indexing.source_retriever import SourceRetriever
@@ -236,15 +247,15 @@ async def _load_existing_index(
         codebase_path=str(codebase_path),
         embedding_model=embedding_model,
         verbose=False,
-        persist_path=str(paths['chroma_path'])
+        persist_path=str(paths["chroma_path"]),
     )
 
     if not retriever.load_existing_index():
         raise ToolError(f"Failed to load index from {paths['chroma_path']}")
 
-    metadata = retriever.load_metadata(str(paths['metadata_path']))
-    stats = metadata.get('stats', {}) if metadata else {}
-    indexed_at = metadata.get('indexed_at') if metadata else None
+    metadata = retriever.load_metadata(str(paths["metadata_path"]))
+    stats = metadata.get("stats", {}) if metadata else {}
+    indexed_at = metadata.get("indexed_at") if metadata else None
 
     state.retriever = retriever
     state.codebase_path = codebase_path
@@ -254,16 +265,12 @@ async def _load_existing_index(
         "mode_used": "load_only",
         "message": f"Loaded existing index for {codebase_path.name}",
         "stats": stats,
-        "indexed_at": indexed_at
+        "indexed_at": indexed_at,
     }
 
 
 async def _incremental_reindex(
-    codebase_path: Path,
-    paths: Dict[str, Path],
-    state,
-    embedding_model: str,
-    ctx: Context = None
+    codebase_path: Path, paths: Dict[str, Path], state, embedding_model: str, ctx: Context = None
 ) -> Dict[str, Any]:
     """Load existing index and perform incremental reindex."""
     from codegrok_mcp.indexing.source_retriever import SourceRetriever
@@ -272,14 +279,14 @@ async def _incremental_reindex(
         codebase_path=str(codebase_path),
         embedding_model=embedding_model,
         verbose=False,
-        persist_path=str(paths['chroma_path'])
+        persist_path=str(paths["chroma_path"]),
     )
 
     if not retriever.load_existing_index():
         raise ToolError(f"Failed to load existing index from {paths['chroma_path']}")
 
     # Load metadata to get file mtimes for incremental detection
-    retriever.load_metadata(str(paths['metadata_path']))
+    retriever.load_metadata(str(paths["metadata_path"]))
 
     # Create progress callback if context available
     progress_callback = None
@@ -291,7 +298,7 @@ async def _incremental_reindex(
     result = retriever.incremental_reindex(progress_callback=progress_callback)
 
     # Save updated metadata
-    retriever.save_metadata(str(paths['metadata_path']))
+    retriever.save_metadata(str(paths["metadata_path"]))
 
     state.retriever = retriever
     state.codebase_path = codebase_path
@@ -300,7 +307,7 @@ async def _incremental_reindex(
         "success": True,
         "mode_used": "incremental",
         "message": f"Incremental reindex complete for {codebase_path.name}",
-        **result
+        **result,
     }
 
 
@@ -310,13 +317,13 @@ async def _full_index(
     state,
     file_extensions: Optional[List[str]],
     embedding_model: str,
-    ctx: Context = None
+    ctx: Context = None,
 ) -> Dict[str, Any]:
     """Perform full index (creates or replaces existing index)."""
     from codegrok_mcp.indexing.source_retriever import SourceRetriever
 
     # Create .codegrok directory
-    paths['codegrok_dir'].mkdir(parents=True, exist_ok=True)
+    paths["codegrok_dir"].mkdir(parents=True, exist_ok=True)
 
     # Create progress callback if context available
     progress_callback = None
@@ -328,7 +335,7 @@ async def _full_index(
         codebase_path=str(codebase_path),
         embedding_model=embedding_model,
         verbose=False,
-        persist_path=str(paths['chroma_path'])
+        persist_path=str(paths["chroma_path"]),
     )
 
     # Index the codebase with progress reporting
@@ -340,7 +347,7 @@ async def _full_index(
         await ctx.report_progress(95, 100, "Saving index...")
 
     # Save metadata
-    retriever.save_metadata(str(paths['metadata_path']))
+    retriever.save_metadata(str(paths["metadata_path"]))
 
     # Update state
     state.retriever = retriever
@@ -350,7 +357,7 @@ async def _full_index(
         "success": True,
         "mode_used": "full",
         "message": f"Successfully indexed {codebase_path.name}",
-        "stats": retriever.get_stats()
+        "stats": retriever.get_stats(),
     }
 
 
@@ -364,25 +371,24 @@ Examples:
 - Find auth code: get_sources(question="authentication login flow")
 - Find Python classes: get_sources(question="user model", language="python", symbol_type="class")""",
     annotations=ToolAnnotations(
-        readOnlyHint=True,      # Only reads from index
-        idempotentHint=True,    # Same query returns same results
-        openWorldHint=False     # Only accesses local ChromaDB
-    )
+        readOnlyHint=True,  # Only reads from index
+        idempotentHint=True,  # Same query returns same results
+        openWorldHint=False,  # Only accesses local ChromaDB
+    ),
 )
 def get_sources(
     question: Annotated[str, Field(description="Natural language question or search query")],
     n_results: Annotated[
-        int,
-        Field(description="Number of source references to return (default: 10)", ge=1, le=50)
+        int, Field(description="Number of source references to return (default: 10)", ge=1, le=50)
     ] = 10,
     language: Annotated[
         Optional[str],
-        Field(description="Filter by language (e.g., 'python', 'javascript', 'typescript')")
+        Field(description="Filter by language (e.g., 'python', 'javascript', 'typescript')"),
     ] = None,
     symbol_type: Annotated[
         Optional[str],
-        Field(description="Filter by symbol type (e.g., 'function', 'class', 'method')")
-    ] = None
+        Field(description="Filter by symbol type (e.g., 'function', 'class', 'method')"),
+    ] = None,
 ) -> Dict[str, Any]:
     """Get source references for a question with optional filters."""
     state = get_state()
@@ -393,15 +399,12 @@ def get_sources(
     try:
         # get_sources_for_question returns tuple: (doc_results, formatted_sources)
         doc_results, formatted_sources = state.retriever.get_sources_for_question(
-            question,
-            n_results=n_results,
-            language=language,
-            symbol_type=symbol_type
+            question, n_results=n_results, language=language, symbol_type=symbol_type
         )
 
         return {
-            "documents": doc_results,      # Full document data with metadata
-            "sources": formatted_sources   # Formatted source references for display
+            "documents": doc_results,  # Full document data with metadata
+            "sources": formatted_sources,  # Formatted source references for display
         }
 
     except Exception as e:
@@ -414,26 +417,22 @@ def get_sources(
 
 Returns: files indexed, total chunks, symbols by type, languages detected, index creation time.""",
     annotations=ToolAnnotations(
-        readOnlyHint=True,      # Only reads metadata
-        idempotentHint=True,    # Same state = same results
-        openWorldHint=False     # Only accesses local state
-    )
+        readOnlyHint=True,  # Only reads metadata
+        idempotentHint=True,  # Same state = same results
+        openWorldHint=False,  # Only accesses local state
+    ),
 )
 def get_stats() -> Dict[str, Any]:
     """Get indexing statistics."""
     state = get_state()
 
     if not state.is_loaded:
-        return {
-            "loaded": False,
-            "codebase_path": None,
-            "stats": None
-        }
+        return {"loaded": False, "codebase_path": None, "stats": None}
 
     return {
         "loaded": True,
         "codebase_path": str(state.codebase_path),
-        "stats": state.retriever.get_stats()
+        "stats": state.retriever.get_stats(),
     }
 
 
@@ -443,10 +442,10 @@ def get_stats() -> Dict[str, Any]:
 
 Returns extensions grouped by language. Currently supports: Python, JavaScript, TypeScript, Go, Rust, Java, C, C++, Ruby, and more.""",
     annotations=ToolAnnotations(
-        readOnlyHint=True,      # Returns static data
-        idempotentHint=True,    # Always same result
-        openWorldHint=False     # No external access
-    )
+        readOnlyHint=True,  # Returns static data
+        idempotentHint=True,  # Always same result
+        openWorldHint=False,  # No external access
+    ),
 )
 def list_supported_languages() -> Dict[str, Any]:
     """List supported file extensions and languages."""
@@ -461,10 +460,7 @@ def list_supported_languages() -> Dict[str, Any]:
     for lang in languages:
         languages[lang] = sorted(languages[lang])
 
-    return {
-        "extensions": sorted(EXTENSION_MAP.keys()),
-        "languages": languages
-    }
+    return {"extensions": sorted(EXTENSION_MAP.keys()), "languages": languages}
 
 
 # =============================================================================
@@ -497,26 +493,24 @@ Examples:
 - Remember a decision: remember(content="Using JWT with refresh tokens for auth", memory_type="decision", tags=["auth"])
 """,
     annotations=ToolAnnotations(
-        readOnlyHint=False,     # Writes to ChromaDB
+        readOnlyHint=False,  # Writes to ChromaDB
         destructiveHint=False,  # Adds data, doesn't delete
-        idempotentHint=False,   # Creates new memory each call
-        openWorldHint=False     # Only local storage
-    )
+        idempotentHint=False,  # Creates new memory each call
+        openWorldHint=False,  # Only local storage
+    ),
 )
 def remember(
     content: Annotated[str, Field(description="The memory content to store")],
     memory_type: Annotated[
-        str,
-        Field(description="Type: conversation, status, decision, preference, doc, note")
+        str, Field(description="Type: conversation, status, decision, preference, doc, note")
     ],
     tags: Annotated[
         Optional[List[str]],
-        Field(description="Optional tags for filtering (e.g., ['auth', 'backend'])")
+        Field(description="Optional tags for filtering (e.g., ['auth', 'backend'])"),
     ] = None,
     ttl: Annotated[
-        str,
-        Field(description="Time-to-live: session, day, week, month, permanent (default)")
-    ] = "permanent"
+        str, Field(description="Time-to-live: session, day, week, month, permanent (default)")
+    ] = "permanent",
 ) -> Dict[str, Any]:
     """Store a new memory with automatic embedding."""
     from codegrok_mcp.indexing.memory_retriever import MemoryRetriever
@@ -532,8 +526,8 @@ def remember(
         paths = _get_codegrok_paths(state.codebase_path)
         state.memory_retriever = MemoryRetriever(
             project_path=str(state.codebase_path),
-            persist_path=str(paths['chroma_path']),
-            verbose=False
+            persist_path=str(paths["chroma_path"]),
+            verbose=False,
         )
 
     # Validate memory_type
@@ -543,17 +537,14 @@ def remember(
 
     # Store memory
     memory = state.memory_retriever.remember(
-        content=content,
-        memory_type=memory_type,
-        tags=tags or [],
-        ttl=ttl
+        content=content, memory_type=memory_type, tags=tags or [], ttl=ttl
     )
 
     return {
         "success": True,
         "memory_id": memory.id,
         "message": f"Stored {memory_type} memory",
-        "tags": memory.tags
+        "tags": memory.tags,
     }
 
 
@@ -577,29 +568,22 @@ Examples:
 - Recent decisions: recall(query="architecture decisions", time_range="week")
 """,
     annotations=ToolAnnotations(
-        readOnlyHint=True,      # Only reads from memory store
-        idempotentHint=True,    # Same query = same results
-        openWorldHint=False     # Only accesses local ChromaDB
-    )
+        readOnlyHint=True,  # Only reads from memory store
+        idempotentHint=True,  # Same query = same results
+        openWorldHint=False,  # Only accesses local ChromaDB
+    ),
 )
 def recall(
     query: Annotated[str, Field(description="Natural language search query")],
     memory_type: Annotated[
         Optional[str],
-        Field(description="Filter by type: conversation, status, decision, preference, doc, note")
+        Field(description="Filter by type: conversation, status, decision, preference, doc, note"),
     ] = None,
-    tags: Annotated[
-        Optional[List[str]],
-        Field(description="Filter by tags (matches any)")
-    ] = None,
-    n_results: Annotated[
-        int,
-        Field(description="Number of results (default: 5)", ge=1, le=20)
-    ] = 5,
+    tags: Annotated[Optional[List[str]], Field(description="Filter by tags (matches any)")] = None,
+    n_results: Annotated[int, Field(description="Number of results (default: 5)", ge=1, le=20)] = 5,
     time_range: Annotated[
-        Optional[str],
-        Field(description="Time filter: today, week, month, all")
-    ] = None
+        Optional[str], Field(description="Time filter: today, week, month, all")
+    ] = None,
 ) -> Dict[str, Any]:
     """Retrieve memories using semantic search."""
     from codegrok_mcp.indexing.memory_retriever import MemoryRetriever
@@ -615,8 +599,8 @@ def recall(
         paths = _get_codegrok_paths(state.codebase_path)
         state.memory_retriever = MemoryRetriever(
             project_path=str(state.codebase_path),
-            persist_path=str(paths['chroma_path']),
-            verbose=False
+            persist_path=str(paths["chroma_path"]),
+            verbose=False,
         )
 
     # Validate memory_type if provided
@@ -627,18 +611,10 @@ def recall(
 
     # Search memories
     memories = state.memory_retriever.recall(
-        query=query,
-        memory_type=memory_type,
-        tags=tags,
-        n_results=n_results,
-        time_range=time_range
+        query=query, memory_type=memory_type, tags=tags, n_results=n_results, time_range=time_range
     )
 
-    return {
-        "success": True,
-        "count": len(memories),
-        "memories": memories
-    }
+    return {"success": True, "count": len(memories), "memories": memories}
 
 
 @mcp.tool(
@@ -657,29 +633,23 @@ Examples:
 - Remove by tag: forget(tags=["deprecated", "outdated"])
 """,
     annotations=ToolAnnotations(
-        readOnlyHint=False,     # Deletes from ChromaDB
-        destructiveHint=True,   # ⚠️ PERMANENTLY DELETES data
-        idempotentHint=True,    # Re-calling same filter is safe
-        openWorldHint=False     # Only local storage
-    )
+        readOnlyHint=False,  # Deletes from ChromaDB
+        destructiveHint=True,  # ⚠️ PERMANENTLY DELETES data
+        idempotentHint=True,  # Re-calling same filter is safe
+        openWorldHint=False,  # Only local storage
+    ),
 )
 def forget(
-    memory_id: Annotated[
-        Optional[str],
-        Field(description="Specific memory ID to delete")
-    ] = None,
+    memory_id: Annotated[Optional[str], Field(description="Specific memory ID to delete")] = None,
     memory_type: Annotated[
-        Optional[str],
-        Field(description="Delete all memories of this type")
+        Optional[str], Field(description="Delete all memories of this type")
     ] = None,
     tags: Annotated[
-        Optional[List[str]],
-        Field(description="Delete memories with any of these tags")
+        Optional[List[str]], Field(description="Delete memories with any of these tags")
     ] = None,
     older_than: Annotated[
-        Optional[str],
-        Field(description="Delete memories older than: 1d, 7d, 30d, 1y")
-    ] = None
+        Optional[str], Field(description="Delete memories older than: 1d, 7d, 30d, 1y")
+    ] = None,
 ) -> Dict[str, Any]:
     """Remove memories matching criteria."""
     from codegrok_mcp.indexing.memory_retriever import MemoryRetriever
@@ -693,24 +663,23 @@ def forget(
         paths = _get_codegrok_paths(state.codebase_path)
         state.memory_retriever = MemoryRetriever(
             project_path=str(state.codebase_path),
-            persist_path=str(paths['chroma_path']),
-            verbose=False
+            persist_path=str(paths["chroma_path"]),
+            verbose=False,
         )
 
     if not any([memory_id, memory_type, tags, older_than]):
-        raise ToolError("Must specify at least one filter: memory_id, memory_type, tags, or older_than")
+        raise ToolError(
+            "Must specify at least one filter: memory_id, memory_type, tags, or older_than"
+        )
 
     result = state.memory_retriever.forget(
-        memory_id=memory_id,
-        memory_type=memory_type,
-        tags=tags,
-        older_than=older_than
+        memory_id=memory_id, memory_type=memory_type, tags=tags, older_than=older_than
     )
 
     return {
         "success": True,
         "deleted": result["deleted"],
-        "message": f"Deleted {result['deleted']} memories"
+        "message": f"Deleted {result['deleted']} memories",
     }
 
 
@@ -720,10 +689,10 @@ def forget(
 
 Returns: total memories, count by type, count by TTL, oldest/newest memory dates.""",
     annotations=ToolAnnotations(
-        readOnlyHint=True,      # Only reads metadata
-        idempotentHint=True,    # Same state = same results
-        openWorldHint=False     # Only accesses local state
-    )
+        readOnlyHint=True,  # Only reads metadata
+        idempotentHint=True,  # Same state = same results
+        openWorldHint=False,  # Only accesses local state
+    ),
 )
 def memory_stats() -> Dict[str, Any]:
     """Get memory statistics."""
@@ -732,26 +701,19 @@ def memory_stats() -> Dict[str, Any]:
     state = get_state()
 
     if not state.codebase_path:
-        return {
-            "loaded": False,
-            "message": "No codebase loaded. Use 'learn' first."
-        }
+        return {"loaded": False, "message": "No codebase loaded. Use 'learn' first."}
 
     if state.memory_retriever is None:
         paths = _get_codegrok_paths(state.codebase_path)
         state.memory_retriever = MemoryRetriever(
             project_path=str(state.codebase_path),
-            persist_path=str(paths['chroma_path']),
-            verbose=False
+            persist_path=str(paths["chroma_path"]),
+            verbose=False,
         )
 
     stats = state.memory_retriever.get_stats()
 
-    return {
-        "loaded": True,
-        "project": str(state.codebase_path),
-        **stats
-    }
+    return {"loaded": True, "project": str(state.codebase_path), **stats}
 
 
 def main():  # pragma: no cover

@@ -5,6 +5,7 @@ This simulates what an MCP client does, without the protocol overhead.
 Note: FastMCP's @mcp.tool decorator wraps functions into FunctionTool objects.
 We access the underlying function via the .fn attribute.
 """
+
 import asyncio
 import pytest
 from pathlib import Path
@@ -13,7 +14,7 @@ from codegrok_mcp.mcp.server import (
     learn as learn_tool,
     get_sources as get_sources_tool,
     get_stats as get_stats_tool,
-    list_supported_languages as list_supported_languages_tool
+    list_supported_languages as list_supported_languages_tool,
 )
 from codegrok_mcp.mcp.state import get_state, reset_state
 
@@ -71,10 +72,7 @@ class TestLearnTool:
         assert (codegrok_dir / "metadata.json").exists()
 
     def test_learn_with_custom_extensions(self, temp_project):
-        result = learn(
-            path=str(temp_project),
-            file_extensions=[".py"]
-        )
+        result = learn(path=str(temp_project), file_extensions=[".py"])
 
         assert result["success"] is True
         assert result["stats"]["total_files"] == 2
@@ -95,7 +93,6 @@ class TestLearnTool:
         file.write_text("content")
         with pytest.raises(ToolError, match="not a directory"):
             learn(path=str(file))
-
 
 
 class TestGetStatsTool:
@@ -148,7 +145,6 @@ class TestGetSourcesTool:
             get_sources(question="test")
 
 
-
 class TestLoadOnlyMode:
     """Test the learn tool with mode='load_only' - loads existing index."""
 
@@ -181,7 +177,7 @@ class TestIncrementalReindex:
         learn(path=str(temp_project))
 
         # Modify a file
-        (temp_project / "main.py").write_text('def new_function(): pass')
+        (temp_project / "main.py").write_text("def new_function(): pass")
 
         # Learn again with auto mode (should do incremental)
         result = learn(path=str(temp_project), mode="auto")

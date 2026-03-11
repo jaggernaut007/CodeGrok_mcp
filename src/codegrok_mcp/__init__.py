@@ -24,27 +24,35 @@ def __getattr__(name: str):
     """Lazy import heavy modules only when accessed."""
     if name == "SourceRetriever":
         from codegrok_mcp.indexing.source_retriever import SourceRetriever
+
         return SourceRetriever
     elif name == "TreeSitterParser":
         from codegrok_mcp.parsers.treesitter_parser import TreeSitterParser
+
         return TreeSitterParser
     elif name == "ThreadLocalParserFactory":
         from codegrok_mcp.parsers.treesitter_parser import ThreadLocalParserFactory
+
         return ThreadLocalParserFactory
     elif name == "Symbol":
         from codegrok_mcp.core.models import Symbol
+
         return Symbol
     elif name == "SymbolType":
         from codegrok_mcp.core.models import SymbolType
+
         return SymbolType
     elif name == "ParsedFile":
         from codegrok_mcp.core.models import ParsedFile
+
         return ParsedFile
     elif name == "CodebaseIndex":
         from codegrok_mcp.core.models import CodebaseIndex
+
         return CodebaseIndex
     elif name == "IParser":
         from codegrok_mcp.core.interfaces import IParser
+
         return IParser
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

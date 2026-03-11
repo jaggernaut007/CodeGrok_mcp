@@ -12,6 +12,7 @@ MCP Protocol Overview:
 This test file spawns the actual MCP server as a subprocess and
 communicates with it via stdin/stdout - the EXACT same way Claude does.
 """
+
 import pytest
 import json
 import subprocess
@@ -38,7 +39,7 @@ class StdioMCPClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=1  # Line buffered
+            bufsize=1,  # Line buffered
         )
         # Give server time to initialize
         time.sleep(0.5)
@@ -59,7 +60,7 @@ class StdioMCPClient:
             "jsonrpc": "2.0",
             "id": self.request_id,
             "method": method,
-            "params": params or {}
+            "params": params or {},
         }
 
         # Write to stdin (this is what Claude does!)
@@ -76,11 +77,14 @@ class StdioMCPClient:
 
     def initialize(self) -> dict:
         """MCP initialization handshake."""
-        return self._send_request("initialize", {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "pytest-simulator", "version": "1.0.0"}
-        })
+        return self._send_request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "pytest-simulator", "version": "1.0.0"},
+            },
+        )
 
     def list_tools(self) -> list:
         """Discover available tools (tools/list)."""
@@ -89,10 +93,7 @@ class StdioMCPClient:
 
     def call_tool(self, name: str, arguments: dict = None) -> dict:
         """Call an MCP tool (tools/call)."""
-        return self._send_request("tools/call", {
-            "name": name,
-            "arguments": arguments or {}
-        })
+        return self._send_request("tools/call", {"name": name, "arguments": arguments or {}})
 
 
 class TestStdioProtocol:
@@ -156,17 +157,14 @@ class TestStdioProtocol:
         assert len(tools) >= 4
 
         # Step 3: Learn codebase
-        learn_response = mcp_client.call_tool("learn", {
-            "path": str(temp_project)
-        })
+        learn_response = mcp_client.call_tool("learn", {"path": str(temp_project)})
         learn_result = json.loads(learn_response["result"]["content"][0]["text"])
         assert learn_result["success"] is True
 
         # Step 4: Search for code
-        search_response = mcp_client.call_tool("get_sources", {
-            "question": "calculator add",
-            "n_results": 5
-        })
+        search_response = mcp_client.call_tool(
+            "get_sources", {"question": "calculator add", "n_results": 5}
+        )
         search_result = json.loads(search_response["result"]["content"][0]["text"])
         assert "sources" in search_result
 
@@ -193,8 +191,7 @@ class TestStdioEdgeCases:
 
         # Rapid fire search requests
         for i in range(5):
-            response = mcp_client.call_tool("get_sources", {
-                "question": f"query {i}",
-                "n_results": 2
-            })
+            response = mcp_client.call_tool(
+                "get_sources", {"question": f"query {i}", "n_results": 2}
+            )
             assert "result" in response

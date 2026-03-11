@@ -38,10 +38,10 @@ from codegrok_mcp.mcp.server import (
 )
 from codegrok_mcp.mcp.state import get_state, reset_state
 
-
 # =============================================================================
 # Test Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def indexed_project(temp_project):
@@ -99,7 +99,7 @@ DEFAULT_TIMEOUT = 30
 ''')
 
     # JavaScript file
-    (tmp_path / "src" / "helper.js").write_text(r'''/**
+    (tmp_path / "src" / "helper.js").write_text(r"""/**
  * Helper functions for the application.
  */
 
@@ -116,7 +116,7 @@ const CONFIG = {
     maxItems: 100,
     timeout: 5000
 };
-''')
+""")
 
     return tmp_path
 
@@ -124,6 +124,7 @@ const CONFIG = {
 # =============================================================================
 # Helper Functions
 # =============================================================================
+
 
 def learn(**kwargs):
     """Helper to run async learn function synchronously."""
@@ -168,6 +169,7 @@ def list_supported_languages():
 # =============================================================================
 # Tool Discovery Tests
 # =============================================================================
+
 
 class TestToolDiscovery:
     """Test that all 8 tools are properly exposed via MCP."""
@@ -214,79 +216,81 @@ class TestToolDiscovery:
 # Tool Annotations Tests
 # =============================================================================
 
+
 class TestToolAnnotations:
     """Test that tool annotations are correctly set per MCP spec."""
 
     def _get_tool_annotations(self, tool_name: str) -> Dict[str, Any]:
         """Get annotations for a tool by name."""
         tool = mcp._tool_manager._tools.get(tool_name)
-        if tool and hasattr(tool, 'annotations') and tool.annotations:
+        if tool and hasattr(tool, "annotations") and tool.annotations:
             return {
-                'readOnlyHint': tool.annotations.readOnlyHint,
-                'destructiveHint': tool.annotations.destructiveHint,
-                'idempotentHint': tool.annotations.idempotentHint,
-                'openWorldHint': tool.annotations.openWorldHint,
+                "readOnlyHint": tool.annotations.readOnlyHint,
+                "destructiveHint": tool.annotations.destructiveHint,
+                "idempotentHint": tool.annotations.idempotentHint,
+                "openWorldHint": tool.annotations.openWorldHint,
             }
         return {}
 
     def test_learn_annotations(self):
         """learn: writes data, not destructive, idempotent, local only."""
         annotations = self._get_tool_annotations("learn")
-        assert annotations.get('readOnlyHint') is False, "learn writes to .codegrok/"
-        assert annotations.get('destructiveHint') is False, "learn doesn't destroy user data"
-        assert annotations.get('idempotentHint') is True, "learn can be safely re-run"
-        assert annotations.get('openWorldHint') is False, "learn only accesses local files"
+        assert annotations.get("readOnlyHint") is False, "learn writes to .codegrok/"
+        assert annotations.get("destructiveHint") is False, "learn doesn't destroy user data"
+        assert annotations.get("idempotentHint") is True, "learn can be safely re-run"
+        assert annotations.get("openWorldHint") is False, "learn only accesses local files"
 
     def test_get_sources_annotations(self):
         """get_sources: read-only search."""
         annotations = self._get_tool_annotations("get_sources")
-        assert annotations.get('readOnlyHint') is True, "get_sources only reads"
-        assert annotations.get('idempotentHint') is True, "Same query = same results"
-        assert annotations.get('openWorldHint') is False, "Local ChromaDB only"
+        assert annotations.get("readOnlyHint") is True, "get_sources only reads"
+        assert annotations.get("idempotentHint") is True, "Same query = same results"
+        assert annotations.get("openWorldHint") is False, "Local ChromaDB only"
 
     def test_get_stats_annotations(self):
         """get_stats: read-only metadata."""
         annotations = self._get_tool_annotations("get_stats")
-        assert annotations.get('readOnlyHint') is True
-        assert annotations.get('idempotentHint') is True
+        assert annotations.get("readOnlyHint") is True
+        assert annotations.get("idempotentHint") is True
 
     def test_list_supported_languages_annotations(self):
         """list_supported_languages: static data, always read-only."""
         annotations = self._get_tool_annotations("list_supported_languages")
-        assert annotations.get('readOnlyHint') is True
-        assert annotations.get('idempotentHint') is True
+        assert annotations.get("readOnlyHint") is True
+        assert annotations.get("idempotentHint") is True
 
     def test_remember_annotations(self):
         """remember: writes data, not destructive, NOT idempotent."""
         annotations = self._get_tool_annotations("remember")
-        assert annotations.get('readOnlyHint') is False, "remember writes to ChromaDB"
-        assert annotations.get('destructiveHint') is False, "remember adds, doesn't delete"
-        assert annotations.get('idempotentHint') is False, "Each call creates new memory"
-        assert annotations.get('openWorldHint') is False
+        assert annotations.get("readOnlyHint") is False, "remember writes to ChromaDB"
+        assert annotations.get("destructiveHint") is False, "remember adds, doesn't delete"
+        assert annotations.get("idempotentHint") is False, "Each call creates new memory"
+        assert annotations.get("openWorldHint") is False
 
     def test_recall_annotations(self):
         """recall: read-only search."""
         annotations = self._get_tool_annotations("recall")
-        assert annotations.get('readOnlyHint') is True
-        assert annotations.get('idempotentHint') is True
+        assert annotations.get("readOnlyHint") is True
+        assert annotations.get("idempotentHint") is True
 
     def test_forget_annotations_destructive(self):
         """forget: DESTRUCTIVE - permanently deletes data."""
         annotations = self._get_tool_annotations("forget")
-        assert annotations.get('readOnlyHint') is False, "forget deletes data"
-        assert annotations.get('destructiveHint') is True, "forget is DESTRUCTIVE"
-        assert annotations.get('idempotentHint') is True, "Re-calling same filter is safe"
+        assert annotations.get("readOnlyHint") is False, "forget deletes data"
+        assert annotations.get("destructiveHint") is True, "forget is DESTRUCTIVE"
+        assert annotations.get("idempotentHint") is True, "Re-calling same filter is safe"
 
     def test_memory_stats_annotations(self):
         """memory_stats: read-only statistics."""
         annotations = self._get_tool_annotations("memory_stats")
-        assert annotations.get('readOnlyHint') is True
-        assert annotations.get('idempotentHint') is True
+        assert annotations.get("readOnlyHint") is True
+        assert annotations.get("idempotentHint") is True
 
 
 # =============================================================================
 # Server Instructions Tests
 # =============================================================================
+
 
 class TestServerInstructions:
     """Test that server instructions properly guide agents."""
@@ -327,6 +331,7 @@ class TestServerInstructions:
 # =============================================================================
 # Progressive Discovery Tests (Learn-First Requirement)
 # =============================================================================
+
 
 class TestLearnFirstRequirement:
     """Test that tools properly require 'learn' to be called first."""
@@ -381,6 +386,7 @@ class TestLearnFirstRequirement:
 # Error Message Quality Tests
 # =============================================================================
 
+
 class TestErrorMessageQuality:
     """Test that error messages guide agents to correct actions."""
 
@@ -418,6 +424,7 @@ class TestErrorMessageQuality:
 # =============================================================================
 # Tool Description Tests
 # =============================================================================
+
 
 class TestToolDescriptions:
     """Test that tool descriptions are informative and consistent."""
@@ -464,6 +471,7 @@ class TestToolDescriptions:
 # Protocol-Level Tests (Subprocess)
 # =============================================================================
 
+
 class StdioMCPClient:
     """MCP client that communicates via stdio subprocess."""
 
@@ -479,7 +487,7 @@ class StdioMCPClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=1
+            bufsize=1,
         )
         time.sleep(0.5)  # Allow server to initialize
 
@@ -499,7 +507,7 @@ class StdioMCPClient:
             "jsonrpc": "2.0",
             "id": self.request_id,
             "method": method,
-            "params": params or {}
+            "params": params or {},
         }
 
         request_line = json.dumps(request) + "\n"
@@ -514,11 +522,14 @@ class StdioMCPClient:
 
     def initialize(self) -> dict:
         """MCP initialization handshake."""
-        return self._send_request("initialize", {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "integration-test", "version": "1.0.0"}
-        })
+        return self._send_request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "integration-test", "version": "1.0.0"},
+            },
+        )
 
     def list_tools(self) -> List[dict]:
         """Get available tools."""
@@ -527,10 +538,7 @@ class StdioMCPClient:
 
     def call_tool(self, name: str, arguments: dict = None) -> dict:
         """Call a tool."""
-        return self._send_request("tools/call", {
-            "name": name,
-            "arguments": arguments or {}
-        })
+        return self._send_request("tools/call", {"name": name, "arguments": arguments or {}})
 
 
 class TestProtocolToolDiscovery:
@@ -550,8 +558,16 @@ class TestProtocolToolDiscovery:
         tools = mcp_client.list_tools()
 
         tool_names = [t["name"] for t in tools]
-        expected = ["learn", "get_sources", "get_stats", "list_supported_languages",
-                    "remember", "recall", "forget", "memory_stats"]
+        expected = [
+            "learn",
+            "get_sources",
+            "get_stats",
+            "list_supported_languages",
+            "remember",
+            "recall",
+            "forget",
+            "memory_stats",
+        ]
 
         for name in expected:
             assert name in tool_names, f"Tool '{name}' not in tools/list response"
@@ -641,28 +657,29 @@ class TestProtocolToolExecution:
         assert learn_data["success"] is True
 
         # 2. Get sources
-        search_resp = mcp_client.call_tool("get_sources", {
-            "question": "calculator add",
-            "n_results": 5
-        })
+        search_resp = mcp_client.call_tool(
+            "get_sources", {"question": "calculator add", "n_results": 5}
+        )
         search_data = json.loads(search_resp["result"]["content"][0]["text"])
         assert "sources" in search_data
 
         # 3. Remember
-        remember_resp = mcp_client.call_tool("remember", {
-            "content": "User prefers functional style",
-            "memory_type": "preference",
-            "tags": ["style", "coding"]
-        })
+        remember_resp = mcp_client.call_tool(
+            "remember",
+            {
+                "content": "User prefers functional style",
+                "memory_type": "preference",
+                "tags": ["style", "coding"],
+            },
+        )
         remember_data = json.loads(remember_resp["result"]["content"][0]["text"])
         assert remember_data["success"] is True
         assert "memory_id" in remember_data
 
         # 4. Recall
-        recall_resp = mcp_client.call_tool("recall", {
-            "query": "coding style preference",
-            "n_results": 5
-        })
+        recall_resp = mcp_client.call_tool(
+            "recall", {"query": "coding style preference", "n_results": 5}
+        )
         recall_data = json.loads(recall_resp["result"]["content"][0]["text"])
         assert recall_data["success"] is True
         assert recall_data["count"] >= 1
@@ -691,6 +708,7 @@ class TestProtocolToolExecution:
 # Integration: Combined Workflow Tests
 # =============================================================================
 
+
 class TestCombinedWorkflow:
     """Test complete agent workflows combining code search and memory."""
 
@@ -709,7 +727,7 @@ class TestCombinedWorkflow:
         memory1 = remember(
             content="Using Calculator class for all math operations",
             memory_type="decision",
-            tags=["architecture", "math"]
+            tags=["architecture", "math"],
         )
         assert memory1["success"] is True
 
@@ -717,7 +735,7 @@ class TestCombinedWorkflow:
         memory2 = remember(
             content="User prefers docstrings on all public methods",
             memory_type="preference",
-            tags=["style", "documentation"]
+            tags=["style", "documentation"],
         )
         assert memory2["success"] is True
 
@@ -740,7 +758,7 @@ class TestCombinedWorkflow:
         remember(
             content="Important architectural decision: use microservices",
             memory_type="decision",
-            tags=["architecture"]
+            tags=["architecture"],
         )
 
         # Simulate session restart by resetting state
@@ -776,6 +794,7 @@ class TestCombinedWorkflow:
 # Edge Cases and Robustness Tests
 # =============================================================================
 
+
 class TestEdgeCases:
     """Test edge cases and error handling."""
 
@@ -793,8 +812,7 @@ class TestEdgeCases:
     def test_unicode_in_memory(self, indexed_project):
         """Handle unicode content in memories."""
         result = remember(
-            content="User prefers emoji: 🎉 and unicode: café résumé",
-            memory_type="preference"
+            content="User prefers emoji: 🎉 and unicode: café résumé", memory_type="preference"
         )
         assert result["success"] is True
 
@@ -810,11 +828,7 @@ class TestEdgeCases:
     def test_many_tags(self, indexed_project):
         """Handle many tags on a memory."""
         tags = [f"tag{i}" for i in range(50)]
-        result = remember(
-            content="Memory with many tags",
-            memory_type="note",
-            tags=tags
-        )
+        result = remember(content="Memory with many tags", memory_type="note", tags=tags)
         assert result["success"] is True
 
     def test_forget_nonexistent_id(self, indexed_project):
@@ -827,9 +841,7 @@ class TestEdgeCases:
         # Clear any memories first
         state = get_state()
         if state.memory_retriever:
-            state.memory_retriever.collection.delete(
-                where={"project": str(state.codebase_path)}
-            )
+            state.memory_retriever.collection.delete(where={"project": str(state.codebase_path)})
 
         result = recall(query="something that doesn't exist")
         assert result["success"] is True
@@ -846,9 +858,7 @@ class TestEdgeCases:
         def store_memory(i):
             try:
                 result = remember(
-                    content=f"Concurrent memory {i}",
-                    memory_type="note",
-                    tags=[f"concurrent-{i}"]
+                    content=f"Concurrent memory {i}", memory_type="note", tags=[f"concurrent-{i}"]
                 )
                 results.append(result)
             except Exception as e:
@@ -869,17 +879,13 @@ class TestEdgeCases:
 # Memory Type Tests
 # =============================================================================
 
+
 class TestMemoryTypes:
     """Test all memory types work correctly."""
 
-    @pytest.mark.parametrize("memory_type", [
-        "conversation",
-        "status",
-        "decision",
-        "preference",
-        "doc",
-        "note"
-    ])
+    @pytest.mark.parametrize(
+        "memory_type", ["conversation", "status", "decision", "preference", "doc", "note"]
+    )
     def test_all_memory_types(self, indexed_project, memory_type):
         """Test each memory type can be stored and recalled."""
         content = f"Test content for {memory_type}"
@@ -901,23 +907,14 @@ class TestMemoryTypes:
 # TTL Tests
 # =============================================================================
 
+
 class TestMemoryTTL:
     """Test memory TTL functionality."""
 
-    @pytest.mark.parametrize("ttl", [
-        "session",
-        "day",
-        "week",
-        "month",
-        "permanent"
-    ])
+    @pytest.mark.parametrize("ttl", ["session", "day", "week", "month", "permanent"])
     def test_all_ttl_values(self, indexed_project, ttl):
         """Test each TTL value is accepted."""
-        result = remember(
-            content=f"Memory with {ttl} TTL",
-            memory_type="note",
-            ttl=ttl
-        )
+        result = remember(content=f"Memory with {ttl} TTL", memory_type="note", ttl=ttl)
         assert result["success"] is True
 
     def test_invalid_ttl_rejected(self, indexed_project):
@@ -934,13 +931,14 @@ class TestMemoryTTL:
                 content="test",
                 memory_type=MemoryType.NOTE,
                 project="test",
-                ttl="invalid_ttl"
+                ttl="invalid_ttl",
             )
 
 
 # =============================================================================
 # Filter Tests
 # =============================================================================
+
 
 class TestRecallFilters:
     """Test recall filtering capabilities."""
@@ -963,7 +961,9 @@ class TestRecallFilters:
         # Filter by auth tag
         results = recall(query="implementation", tags=["auth"])
         # Should find the auth-tagged memory
-        assert any("auth" in m.get("tags", []) for m in results["memories"]) or results["count"] >= 0
+        assert (
+            any("auth" in m.get("tags", []) for m in results["memories"]) or results["count"] >= 0
+        )
 
     def test_filter_by_time_range(self, indexed_project):
         """Filter recall by time range."""
@@ -977,6 +977,7 @@ class TestRecallFilters:
 # =============================================================================
 # Forget Tests
 # =============================================================================
+
 
 class TestForgetOperations:
     """Test forget tool functionality."""

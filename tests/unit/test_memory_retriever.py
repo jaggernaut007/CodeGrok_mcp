@@ -26,7 +26,7 @@ class TestMemoryRetriever:
             project_path=str(tmp_path),
             persist_path=str(tmp_path / "chroma"),
             embedding_service=mock_embedding_service,
-            verbose=False
+            verbose=False,
         )
 
     @pytest.fixture
@@ -36,7 +36,7 @@ class TestMemoryRetriever:
             project_path=str(tmp_path),
             persist_path=str(tmp_path / "chroma_verbose"),
             embedding_service=mock_embedding_service,
-            verbose=True
+            verbose=True,
         )
 
     @pytest.fixture
@@ -46,7 +46,7 @@ class TestMemoryRetriever:
             project_path=str(tmp_path),
             persist_path=None,  # Ephemeral mode
             embedding_service=mock_embedding_service,
-            verbose=False
+            verbose=False,
         )
 
     # ==========================================================================
@@ -56,9 +56,7 @@ class TestMemoryRetriever:
     def test_remember_creates_memory(self, retriever):
         """Test that remember() stores a memory."""
         memory = retriever.remember(
-            content="Test memory content",
-            memory_type="status",
-            tags=["test"]
+            content="Test memory content", memory_type="status", tags=["test"]
         )
 
         assert memory.id is not None
@@ -69,29 +67,21 @@ class TestMemoryRetriever:
     def test_recall_returns_relevant_memories(self, retriever):
         """Test that recall() returns stored memories."""
         retriever.remember(
-            content="Authentication uses JWT tokens",
-            memory_type="decision",
-            tags=["auth"]
+            content="Authentication uses JWT tokens", memory_type="decision", tags=["auth"]
         )
 
-        results = retriever.recall(
-            query="How does auth work?",
-            n_results=5
-        )
+        results = retriever.recall(query="How does auth work?", n_results=5)
 
         assert len(results) > 0
-        assert "JWT" in results[0]['content']
+        assert "JWT" in results[0]["content"]
 
     def test_forget_removes_memory(self, retriever):
         """Test that forget() removes memories."""
-        memory = retriever.remember(
-            content="Temporary note",
-            memory_type="note"
-        )
+        memory = retriever.remember(content="Temporary note", memory_type="note")
 
         result = retriever.forget(memory_id=memory.id)
 
-        assert result['deleted'] == 1
+        assert result["deleted"] == 1
 
     def test_get_stats(self, retriever):
         """Test that get_stats returns correct counts."""
@@ -101,9 +91,9 @@ class TestMemoryRetriever:
 
         stats = retriever.get_stats()
 
-        assert stats['total_memories'] == 3
-        assert stats['by_type'].get('note', 0) == 2
-        assert stats['by_type'].get('status', 0) == 1
+        assert stats["total_memories"] == 3
+        assert stats["by_type"].get("note", 0) == 2
+        assert stats["by_type"].get("status", 0) == 1
 
     # ==========================================================================
     # All Memory Types Tests
@@ -126,7 +116,7 @@ class TestMemoryRetriever:
             assert memory.content == content
 
         stats = retriever.get_stats()
-        assert stats['total_memories'] == 6
+        assert stats["total_memories"] == 6
 
     def test_recall_by_each_memory_type(self, retriever):
         """Test recalling memories filtered by each type."""
@@ -140,9 +130,9 @@ class TestMemoryRetriever:
         status_results = retriever.recall(query="blocked", memory_type="status")
         decision_results = retriever.recall(query="frontend", memory_type="decision")
 
-        assert all(r['memory_type'] == 'conversation' for r in conv_results)
-        assert all(r['memory_type'] == 'status' for r in status_results)
-        assert all(r['memory_type'] == 'decision' for r in decision_results)
+        assert all(r["memory_type"] == "conversation" for r in conv_results)
+        assert all(r["memory_type"] == "status" for r in status_results)
+        assert all(r["memory_type"] == "decision" for r in decision_results)
 
     # ==========================================================================
     # Filtering Tests
@@ -153,24 +143,18 @@ class TestMemoryRetriever:
         retriever.remember(content="Status update", memory_type="status")
         retriever.remember(content="A decision", memory_type="decision")
 
-        results = retriever.recall(
-            query="update",
-            memory_type="status"
-        )
+        results = retriever.recall(query="update", memory_type="status")
 
-        assert all(r['memory_type'] == 'status' for r in results)
+        assert all(r["memory_type"] == "status" for r in results)
 
     def test_tag_filtering(self, retriever):
         """Test filtering by tags."""
         retriever.remember(content="Auth note", memory_type="note", tags=["auth"])
         retriever.remember(content="DB note", memory_type="note", tags=["database"])
 
-        results = retriever.recall(
-            query="note",
-            tags=["auth"]
-        )
+        results = retriever.recall(query="note", tags=["auth"])
 
-        assert all("auth" in r['tags'] for r in results)
+        assert all("auth" in r["tags"] for r in results)
 
     def test_multiple_tags_filtering(self, retriever):
         """Test filtering with multiple tags (OR logic)."""
@@ -184,7 +168,7 @@ class TestMemoryRetriever:
         # Should find auth and database, not frontend
         tags_found = set()
         for r in results:
-            tags_found.update(r['tags'])
+            tags_found.update(r["tags"])
 
         assert "auth" in tags_found or "database" in tags_found
 
@@ -244,9 +228,9 @@ class TestMemoryRetriever:
 
         result = retriever.forget(memory_type="note")
 
-        assert result['deleted'] == 2
+        assert result["deleted"] == 2
         stats = retriever.get_stats()
-        assert stats['total_memories'] == 1
+        assert stats["total_memories"] == 1
 
     def test_forget_by_tags(self, retriever):
         """Test deleting memories by tags."""
@@ -256,9 +240,9 @@ class TestMemoryRetriever:
 
         result = retriever.forget(tags=["deprecated"])
 
-        assert result['deleted'] == 2
+        assert result["deleted"] == 2
         stats = retriever.get_stats()
-        assert stats['total_memories'] == 1
+        assert stats["total_memories"] == 1
 
     def test_forget_by_older_than(self, retriever):
         """Test deleting memories older than specified duration."""
@@ -270,7 +254,7 @@ class TestMemoryRetriever:
 
         # Recent memory should still exist
         stats = retriever.get_stats()
-        assert stats['total_memories'] == 1
+        assert stats["total_memories"] == 1
 
     def test_forget_by_older_than_1d(self, retriever):
         """Test forget with 1d older_than."""
@@ -281,21 +265,21 @@ class TestMemoryRetriever:
 
         # Memory was just created, shouldn't be deleted
         stats = retriever.get_stats()
-        assert stats['total_memories'] == 1
+        assert stats["total_memories"] == 1
 
     def test_forget_by_older_than_7d(self, retriever):
         """Test forget with 7d older_than."""
         retriever.remember(content="Memory", memory_type="note")
         result = retriever.forget(older_than="7d")
         stats = retriever.get_stats()
-        assert stats['total_memories'] == 1
+        assert stats["total_memories"] == 1
 
     def test_forget_by_older_than_30d(self, retriever):
         """Test forget with 30d older_than."""
         retriever.remember(content="Memory", memory_type="note")
         result = retriever.forget(older_than="30d")
         stats = retriever.get_stats()
-        assert stats['total_memories'] == 1
+        assert stats["total_memories"] == 1
 
     def test_forget_combined_type_and_tags(self, retriever):
         """Test forget with both memory_type and tags filters."""
@@ -308,7 +292,7 @@ class TestMemoryRetriever:
 
         # Only the old note should be deleted
         stats = retriever.get_stats()
-        assert stats['total_memories'] == 2
+        assert stats["total_memories"] == 2
 
     def test_forget_nonexistent_id(self, retriever):
         """Test forgetting a non-existent memory ID."""
@@ -325,9 +309,7 @@ class TestMemoryRetriever:
 
         for ttl in ttl_options:
             memory = retriever.remember(
-                content=f"Memory with TTL {ttl}",
-                memory_type="note",
-                ttl=ttl
+                content=f"Memory with TTL {ttl}", memory_type="note", ttl=ttl
             )
             assert memory.ttl == ttl
 
@@ -339,7 +321,7 @@ class TestMemoryRetriever:
 
         # Permanent memory should still exist
         stats = retriever.get_stats()
-        assert stats['total_memories'] == 1
+        assert stats["total_memories"] == 1
 
     def test_cleanup_expired_function(self, retriever):
         """Test cleanup_expired returns proper structure."""
@@ -365,8 +347,7 @@ class TestMemoryRetriever:
         retriever.remember(content="Specific technical content", memory_type="note")
 
         results = retriever.recall(
-            query="completely unrelated xyz123",
-            min_relevance=0.9  # High threshold
+            query="completely unrelated xyz123", min_relevance=0.9  # High threshold
         )
         # May or may not return results depending on embeddings
 
@@ -379,10 +360,7 @@ class TestMemoryRetriever:
 
     def test_ephemeral_retriever(self, ephemeral_retriever):
         """Test retriever without persistence works."""
-        memory = ephemeral_retriever.remember(
-            content="Ephemeral memory",
-            memory_type="note"
-        )
+        memory = ephemeral_retriever.remember(content="Ephemeral memory", memory_type="note")
         assert memory.id is not None
 
         results = ephemeral_retriever.recall(query="ephemeral")
@@ -393,7 +371,7 @@ class TestMemoryRetriever:
         memory = retriever.remember(
             content="Memory with metadata",
             memory_type="note",
-            metadata={"custom_field": "custom_value", "priority": 1}
+            metadata={"custom_field": "custom_value", "priority": 1},
         )
 
         assert memory.metadata["custom_field"] == "custom_value"
@@ -405,9 +383,7 @@ class TestMemoryRetriever:
 
         for source in sources:
             memory = retriever.remember(
-                content=f"Memory from {source}",
-                memory_type="note",
-                source=source
+                content=f"Memory from {source}", memory_type="note", source=source
             )
             assert memory.source == source
 
@@ -417,9 +393,9 @@ class TestMemoryRetriever:
 
         stats = retriever.get_stats()
 
-        assert 'project' in stats
-        assert 'total_memories' in stats
-        assert 'by_type' in stats
+        assert "project" in stats
+        assert "total_memories" in stats
+        assert "by_type" in stats
 
     def test_stats_persistence(self, tmp_path, mock_embedding_service):
         """Test that stats are persisted and loaded."""
@@ -430,13 +406,13 @@ class TestMemoryRetriever:
             project_path=str(tmp_path),
             persist_path=persist_path,
             embedding_service=mock_embedding_service,
-            verbose=False
+            verbose=False,
         )
         retriever1.remember(content="Persisted memory", memory_type="note")
 
         # Stats should be saved
         stats1 = retriever1.get_stats()
-        assert stats1['total_memories'] == 1
+        assert stats1["total_memories"] == 1
 
     def test_recall_updates_accessed_at(self, retriever):
         """Test that recalling memories updates accessed_at timestamp."""
@@ -459,32 +435,17 @@ class TestMemoryModel:
     def test_memory_validation_empty_content(self):
         """Test memory validation for empty content."""
         with pytest.raises(ValueError, match="content cannot be empty"):
-            Memory(
-                id="test",
-                content="",
-                memory_type=MemoryType.NOTE,
-                project="/test"
-            )
+            Memory(id="test", content="", memory_type=MemoryType.NOTE, project="/test")
 
     def test_memory_validation_empty_id(self):
         """Test memory validation for empty id."""
         with pytest.raises(ValueError, match="id cannot be empty"):
-            Memory(
-                id="",
-                content="Test",
-                memory_type=MemoryType.NOTE,
-                project="/test"
-            )
+            Memory(id="", content="Test", memory_type=MemoryType.NOTE, project="/test")
 
     def test_memory_validation_empty_project(self):
         """Test memory validation for empty project."""
         with pytest.raises(ValueError, match="project cannot be empty"):
-            Memory(
-                id="test",
-                content="Test",
-                memory_type=MemoryType.NOTE,
-                project=""
-            )
+            Memory(id="test", content="Test", memory_type=MemoryType.NOTE, project="")
 
     def test_memory_validation_invalid_memory_type(self):
         """Test memory validation for invalid memory_type."""
@@ -493,7 +454,7 @@ class TestMemoryModel:
                 id="test",
                 content="Test",
                 memory_type="invalid",  # Should be MemoryType enum
-                project="/test"
+                project="/test",
             )
 
     def test_memory_validation_invalid_ttl(self):
@@ -504,7 +465,7 @@ class TestMemoryModel:
                 content="Test",
                 memory_type=MemoryType.NOTE,
                 project="/test",
-                ttl="invalid"
+                ttl="invalid",
             )
 
     def test_memory_serialization(self):
@@ -514,7 +475,7 @@ class TestMemoryModel:
             content="Test content",
             memory_type=MemoryType.DECISION,
             project="/test",
-            tags=["tag1", "tag2"]
+            tags=["tag1", "tag2"],
         )
 
         data = memory.to_dict()
@@ -535,17 +496,17 @@ class TestMemoryModel:
             tags=["a", "b", "c"],
             ttl="week",
             source="agent",
-            metadata={"key": "value"}
+            metadata={"key": "value"},
         )
 
         data = memory.to_dict()
 
-        assert data['id'] == "full-test"
-        assert data['memory_type'] == "status"
-        assert data['tags'] == ["a", "b", "c"]
-        assert data['ttl'] == "week"
-        assert data['source'] == "agent"
-        assert data['metadata'] == {"key": "value"}
+        assert data["id"] == "full-test"
+        assert data["memory_type"] == "status"
+        assert data["tags"] == ["a", "b", "c"]
+        assert data["ttl"] == "week"
+        assert data["source"] == "agent"
+        assert data["metadata"] == {"key": "value"}
 
         # Round-trip
         restored = Memory.from_dict(data)
@@ -554,12 +515,7 @@ class TestMemoryModel:
 
     def test_memory_touch(self):
         """Test that touch() updates accessed_at."""
-        memory = Memory(
-            id="test",
-            content="Test",
-            memory_type=MemoryType.NOTE,
-            project="/test"
-        )
+        memory = Memory(id="test", content="Test", memory_type=MemoryType.NOTE, project="/test")
 
         original_accessed = memory.accessed_at
         time.sleep(0.01)  # Small delay
@@ -570,10 +526,7 @@ class TestMemoryModel:
     def test_memory_default_values(self):
         """Test that Memory has correct default values."""
         memory = Memory(
-            id="defaults",
-            content="Test defaults",
-            memory_type=MemoryType.NOTE,
-            project="/test"
+            id="defaults", content="Test defaults", memory_type=MemoryType.NOTE, project="/test"
         )
 
         assert memory.tags == []
@@ -653,7 +606,7 @@ class TestEdgeCases:
             project_path=str(tmp_path),
             persist_path=str(tmp_path / "chroma"),
             embedding_service=mock_embedding_service,
-            verbose=False
+            verbose=False,
         )
         retriever.remember(content="Test memory", memory_type="note")
 
@@ -672,13 +625,13 @@ class TestEdgeCases:
         metadata_path = tmp_path / "memory_metadata.json"
 
         existing_stats = {
-            'stats': {
-                'total_memories': 10,
-                'by_type': {'note': 5, 'status': 5},
-                'last_cleanup': '2024-01-01T00:00:00'
+            "stats": {
+                "total_memories": 10,
+                "by_type": {"note": 5, "status": 5},
+                "last_cleanup": "2024-01-01T00:00:00",
             }
         }
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, "w") as f:
             json.dump(existing_stats, f)
 
         # Create retriever - should load existing stats
@@ -686,7 +639,7 @@ class TestEdgeCases:
             project_path=str(tmp_path),
             persist_path=str(persist_path),
             embedding_service=mock_embedding_service,
-            verbose=False
+            verbose=False,
         )
 
         # Stats should have been loaded (though actual count may differ)
@@ -698,7 +651,7 @@ class TestEdgeCases:
             project_path=str(tmp_path),
             persist_path=str(tmp_path / "chroma"),
             embedding_service=mock_embedding_service,
-            verbose=False
+            verbose=False,
         )
 
         # Store memory without tags
@@ -714,13 +667,13 @@ class TestEdgeCases:
             project_path=str(tmp_path),
             persist_path=str(tmp_path / "chroma"),
             embedding_service=mock_embedding_service,
-            verbose=False
+            verbose=False,
         )
         retriever.remember(content="Test", memory_type="note")
 
         # Invalid older_than should not crash
         result = retriever.forget(older_than="invalid")
-        assert 'deleted' in result
+        assert "deleted" in result
 
     def test_verbose_recall_logging(self, tmp_path, mock_embedding_service, capsys):
         """Test verbose logging during recall."""
@@ -728,7 +681,7 @@ class TestEdgeCases:
             project_path=str(tmp_path),
             persist_path=str(tmp_path / "chroma"),
             embedding_service=mock_embedding_service,
-            verbose=True
+            verbose=True,
         )
         retriever.remember(content="Verbose recall test", memory_type="note")
         retriever.recall(query="verbose")
@@ -742,7 +695,7 @@ class TestEdgeCases:
             project_path=str(tmp_path),
             persist_path=str(tmp_path / "chroma"),
             embedding_service=mock_embedding_service,
-            verbose=True
+            verbose=True,
         )
         memory = retriever.remember(content="Verbose forget test", memory_type="note")
         retriever.forget(memory_id=memory.id)
@@ -756,7 +709,7 @@ class TestEdgeCases:
             project_path=str(tmp_path),
             persist_path=str(tmp_path / "chroma"),
             embedding_service=mock_embedding_service,
-            verbose=True
+            verbose=True,
         )
         retriever.remember(content="Cleanup test", memory_type="note", ttl="session")
         retriever.cleanup_expired()
@@ -770,7 +723,7 @@ class TestEdgeCases:
             project_path=str(tmp_path),
             persist_path=str(tmp_path / "chroma"),
             embedding_service=mock_embedding_service,
-            verbose=False
+            verbose=False,
         )
 
         # Add memories with different TTLs
@@ -784,7 +737,7 @@ class TestEdgeCases:
 
         # Fresh memories shouldn't be cleaned up
         stats = retriever.get_stats()
-        assert stats['total_memories'] == 5
+        assert stats["total_memories"] == 5
 
     def test_get_stats_last_cleanup(self, tmp_path, mock_embedding_service):
         """Test that get_stats returns last_cleanup time."""
@@ -792,12 +745,12 @@ class TestEdgeCases:
             project_path=str(tmp_path),
             persist_path=str(tmp_path / "chroma"),
             embedding_service=mock_embedding_service,
-            verbose=False
+            verbose=False,
         )
 
         # Initially no cleanup
         stats = retriever.get_stats()
-        assert 'last_cleanup' in stats
+        assert "last_cleanup" in stats
 
         # After cleanup
         retriever.cleanup_expired()

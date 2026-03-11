@@ -1,4 +1,5 @@
 """Utility functions for common operations."""
+
 import json
 import hashlib
 from pathlib import Path

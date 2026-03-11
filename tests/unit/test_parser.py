@@ -1,4 +1,5 @@
 """Unit tests for TreeSitterParser."""
+
 import pytest
 from codegrok_mcp.parsers.treesitter_parser import TreeSitterParser, ThreadLocalParserFactory
 from codegrok_mcp.core.models import SymbolType
@@ -67,7 +68,6 @@ def documented_function():
         assert result.is_successful
         assert any(s.name == "hello" for s in result.symbols)
 
-
     def test_parse_javascript_constants(self, parser, tmp_path):
         js_file = tmp_path / "test.js"
         js_file.write_text("const MAX_SIZE = 100;")
@@ -135,17 +135,14 @@ class TestParserEdgeCases:
         assert "TIMEOUT" in consts
 
 
-
-
 class TestThreadLocalParserFactory:
     def test_thread_local_parser_factory(self):
         factory = ThreadLocalParserFactory()
         parser1 = factory.get_parser()
         parser2 = factory.get_parser()
         assert parser1 is parser2
-        
+
     def test_factory_creates_parser(self):
         factory = ThreadLocalParserFactory()
         parser = factory.get_parser()
         assert isinstance(parser, TreeSitterParser)
-

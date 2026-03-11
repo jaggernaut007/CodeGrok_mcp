@@ -27,6 +27,7 @@ class SymbolType(Enum):
         METHOD: Method within a class
         VARIABLE: Module-level or class-level variable
     """
+
     FUNCTION = "function"
     CLASS = "class"
     METHOD = "method"
@@ -37,7 +38,7 @@ class SymbolType(Enum):
         return self.value
 
     @classmethod
-    def from_string(cls, value: str) -> 'SymbolType':
+    def from_string(cls, value: str) -> "SymbolType":
         """
         Create SymbolType from string value.
 
@@ -79,6 +80,7 @@ class Symbol:
         calls: List of function/method names called by this symbol
         metadata: Extensible dictionary for additional language-specific or custom data
     """
+
     name: str
     type: SymbolType
     filepath: str
@@ -107,7 +109,9 @@ class Symbol:
         if self.line_start < 1:
             raise ValueError(f"line_start must be >= 1, got {self.line_start}")
         if self.line_end < self.line_start:
-            raise ValueError(f"line_end ({self.line_end}) must be >= line_start ({self.line_start})")
+            raise ValueError(
+                f"line_end ({self.line_end}) must be >= line_start ({self.line_start})"
+            )
         if not self.language:
             raise ValueError("Symbol language cannot be empty")
         if not isinstance(self.type, SymbolType):
@@ -143,11 +147,11 @@ class Symbol:
             Dictionary representation with all fields
         """
         data = asdict(self)
-        data['type'] = self.type.value  # Convert enum to string
+        data["type"] = self.type.value  # Convert enum to string
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Symbol':
+    def from_dict(cls, data: Dict[str, Any]) -> "Symbol":
         """
         Create Symbol from dictionary.
 
@@ -161,9 +165,9 @@ class Symbol:
             ValueError: If required fields are missing or invalid
         """
         # Convert type string back to enum
-        if 'type' in data and isinstance(data['type'], str):
+        if "type" in data and isinstance(data["type"], str):
             data = data.copy()  # Don't modify original
-            data['type'] = SymbolType.from_string(data['type'])
+            data["type"] = SymbolType.from_string(data["type"])
         return cls(**data)
 
 
@@ -183,6 +187,7 @@ class ParsedFile:
         parse_time: Time taken to parse this file (seconds)
         error: None if parsing succeeded, error message if failed
     """
+
     filepath: str
     language: str
     symbols: List[Symbol] = field(default_factory=list)
@@ -244,16 +249,16 @@ class ParsedFile:
             Dictionary representation
         """
         return {
-            'filepath': self.filepath,
-            'language': self.language,
-            'symbols': [s.to_dict() for s in self.symbols],
-            'imports': self.imports,
-            'parse_time': self.parse_time,
-            'error': self.error,
+            "filepath": self.filepath,
+            "language": self.language,
+            "symbols": [s.to_dict() for s in self.symbols],
+            "imports": self.imports,
+            "parse_time": self.parse_time,
+            "error": self.error,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'ParsedFile':
+    def from_dict(cls, data: Dict[str, Any]) -> "ParsedFile":
         """
         Create ParsedFile from dictionary.
 
@@ -264,8 +269,8 @@ class ParsedFile:
             ParsedFile instance
         """
         data = data.copy()
-        if 'symbols' in data:
-            data['symbols'] = [Symbol.from_dict(s) for s in data['symbols']]
+        if "symbols" in data:
+            data["symbols"] = [Symbol.from_dict(s) for s in data["symbols"]]
         return cls(**data)
 
 
@@ -284,6 +289,7 @@ class CodebaseIndex:
         total_symbols: Total number of symbols across all files
         indexed_at: ISO 8601 timestamp of when indexing completed
     """
+
     root_path: str
     files: Dict[str, ParsedFile] = field(default_factory=dict)
     total_files: int = 0
@@ -362,15 +368,15 @@ class CodebaseIndex:
             Dictionary representation
         """
         return {
-            'root_path': self.root_path,
-            'files': {path: f.to_dict() for path, f in self.files.items()},
-            'total_files': self.total_files,
-            'total_symbols': self.total_symbols,
-            'indexed_at': self.indexed_at,
+            "root_path": self.root_path,
+            "files": {path: f.to_dict() for path, f in self.files.items()},
+            "total_files": self.total_files,
+            "total_symbols": self.total_symbols,
+            "indexed_at": self.indexed_at,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'CodebaseIndex':
+    def from_dict(cls, data: Dict[str, Any]) -> "CodebaseIndex":
         """
         Create CodebaseIndex from dictionary.
 
@@ -381,8 +387,8 @@ class CodebaseIndex:
             CodebaseIndex instance
         """
         data = data.copy()
-        if 'files' in data:
-            data['files'] = {path: ParsedFile.from_dict(f) for path, f in data['files'].items()}
+        if "files" in data:
+            data["files"] = {path: ParsedFile.from_dict(f) for path, f in data["files"].items()}
         return cls(**data)
 
 
@@ -403,6 +409,7 @@ class MemoryType(Enum):
         DOC: Documentation snippets, README content, API docs
         NOTE: General notes, reminders, TODOs
     """
+
     CONVERSATION = "conversation"
     STATUS = "status"
     DECISION = "decision"
@@ -414,7 +421,7 @@ class MemoryType(Enum):
         return self.value
 
     @classmethod
-    def from_string(cls, value: str) -> 'MemoryType':
+    def from_string(cls, value: str) -> "MemoryType":
         for member in cls:
             if member.value == value.lower():
                 return member
@@ -441,6 +448,7 @@ class Memory:
         source: Origin of memory ("user", "agent", "auto", "import")
         metadata: Extensible dictionary for additional data
     """
+
     id: str
     content: str
     memory_type: MemoryType
@@ -469,24 +477,24 @@ class Memory:
     def to_dict(self) -> Dict[str, Any]:
         """Convert Memory to dictionary for serialization."""
         return {
-            'id': self.id,
-            'content': self.content,
-            'memory_type': self.memory_type.value,
-            'project': self.project,
-            'tags': self.tags,
-            'created_at': self.created_at,
-            'accessed_at': self.accessed_at,
-            'ttl': self.ttl,
-            'source': self.source,
-            'metadata': self.metadata
+            "id": self.id,
+            "content": self.content,
+            "memory_type": self.memory_type.value,
+            "project": self.project,
+            "tags": self.tags,
+            "created_at": self.created_at,
+            "accessed_at": self.accessed_at,
+            "ttl": self.ttl,
+            "source": self.source,
+            "metadata": self.metadata,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Memory':
+    def from_dict(cls, data: Dict[str, Any]) -> "Memory":
         """Create Memory from dictionary."""
         data = data.copy()
-        if 'memory_type' in data and isinstance(data['memory_type'], str):
-            data['memory_type'] = MemoryType.from_string(data['memory_type'])
+        if "memory_type" in data and isinstance(data["memory_type"], str):
+            data["memory_type"] = MemoryType.from_string(data["memory_type"])
         return cls(**data)
 
     def touch(self) -> None:
