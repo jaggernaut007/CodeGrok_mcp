@@ -28,6 +28,7 @@ Usage:
     sources = retriever.get_sources_for_question("How does authentication work?")
 """
 
+import gc
 import json
 import logging
 import os
@@ -71,6 +72,14 @@ SKIP_DIRS = {
     "build",
     ".eggs",
 }
+
+# Memory optimization: process files in batches to limit peak memory usage.
+# Each batch's symbols are converted to chunks then freed before the next batch.
+FILE_BATCH_SIZE = 500
+
+# Cap parallel parse workers to limit memory (each worker holds a tree-sitter parser).
+# Lower than the 32 max in parallel_indexer.py to prevent OOM on large codebases.
+MAX_PARSE_WORKERS = 4
 
 
 def _load_gitignore(directory: Path) -> Optional[pathspec.PathSpec]:
@@ -468,36 +477,61 @@ class SourceRetriever:
         if not progress_callback:
             self._log(f"Found {len(all_files)} files")
 
-        # Step 2: Parse all files
+        # Step 2+3: Parse files and create chunks (memory-optimized)
+        # Symbols are converted to chunks per batch then freed, so we never
+        # hold both a large all_symbols list and a large chunks list simultaneously.
         if not progress_callback:
-            self._log("\nStep 2: Parsing files...")
+            self._log("\nStep 2: Parsing files and creating chunks...")
 
         emit("parsing_start", {"total": len(all_files)})
-        all_symbols = []
+        chunks = []
+        total_symbols = 0
 
         # Use parallel parsing if enabled and there are enough files
         use_parallel = (
             self.parallel and len(all_files) > 50
         )  # Threshold increased for small projects
+
         if use_parallel:
-            # Parallel parsing (3-5x faster for large codebases)
             from codegrok_mcp.indexing.parallel_indexer import parallel_parse_files
 
-            if not progress_callback:
-                self._log(f"  Using parallel parsing with {self.max_workers or 'auto'} workers...")
+            # Cap workers to limit memory (each holds a tree-sitter parser instance)
+            effective_workers = self.max_workers
+            if effective_workers is None:
+                cpu_count = os.cpu_count() or 4
+                effective_workers = max(1, min(cpu_count - 1, MAX_PARSE_WORKERS))
 
-            all_symbols, parse_errors = parallel_parse_files(
-                files=all_files, max_workers=self.max_workers, progress_callback=progress_callback
-            )
-            self.stats["parse_errors"] = parse_errors
+            if not progress_callback:
+                self._log(f"  Using parallel parsing with {effective_workers} workers...")
+
+            # Process files in batches to limit peak memory usage
+            for batch_start in range(0, len(all_files), FILE_BATCH_SIZE):
+                file_batch = all_files[batch_start : batch_start + FILE_BATCH_SIZE]
+                batch_symbols, batch_errors = parallel_parse_files(
+                    files=file_batch,
+                    max_workers=effective_workers,
+                    progress_callback=progress_callback,
+                )
+                self.stats["parse_errors"] += batch_errors
+                total_symbols += len(batch_symbols)
+
+                # Convert symbols to chunks immediately, then free symbol memory
+                for symbol in batch_symbols:
+                    chunks.append(self._create_chunk(symbol))
+                del batch_symbols
+                gc.collect()
         else:
-            # Sequential parsing (original code)
+            # Sequential parsing
             for i, filepath in enumerate(all_files, 1):
                 symbols_count = 0
                 try:
                     parsed = self.parser.parse_file(str(filepath))
-                    all_symbols.extend(parsed.symbols)
                     symbols_count = len(parsed.symbols)
+                    total_symbols += symbols_count
+
+                    # Convert to chunks immediately (don't accumulate symbols)
+                    for symbol in parsed.symbols:
+                        chunks.append(self._create_chunk(symbol))
 
                     emit(
                         "file_parsed",
@@ -518,21 +552,13 @@ class SourceRetriever:
                 if not progress_callback and self.verbose and i % 100 == 0:
                     print(f"  Parsed {i}/{len(all_files)} files...", end="\r")
 
-        self.stats["total_symbols"] = len(all_symbols)
-        if not progress_callback:
-            self._log(f"\nParsed {len(all_symbols):,} symbols from {len(all_files)} files")
-
-        # Step 3: Create chunks
-        if not progress_callback:
-            self._log("\nStep 3: Creating chunks...")
-
-        chunks = [self._create_chunk(symbol) for symbol in all_symbols]
+        self.stats["total_symbols"] = total_symbols
         self.stats["total_chunks"] = len(chunks)
 
         emit("chunks_created", {"total": len(chunks)})
 
         if not progress_callback:
-            self._log(f"Created {len(chunks):,} chunks")
+            self._log(f"\nParsed {total_symbols:,} symbols → {len(chunks):,} chunks")
 
         # Step 4: Get or create ChromaDB collection (supports resumption)
         if not progress_callback:
@@ -634,6 +660,10 @@ class SourceRetriever:
             # Save checkpoint every 1000 chunks
             if checkpoint_path and current_count % 1000 == 0:
                 _save_checkpoint(checkpoint_path, current_count, len(chunks))
+
+        # Free chunks list now that embedding is complete
+        del chunks
+        gc.collect()
 
         # Remove stale chunks (from deleted/renamed files)
         try:

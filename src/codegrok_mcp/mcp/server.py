@@ -20,6 +20,7 @@ Tools:
 from typing import Optional, List, Dict, Any, Annotated, Callable
 from pathlib import Path
 import asyncio
+import os
 
 from fastmcp import FastMCP, Context
 from fastmcp.exceptions import ToolError
@@ -40,6 +41,31 @@ SUPPORTED_EXTENSIONS = sorted(list(EXTENSION_MAP.keys()))
 CODEGROK_DIR = ".codegrok"
 CHROMA_DIR = "chroma"
 METADATA_FILE = "metadata.json"
+
+# Default timeout for indexing operations (seconds).
+# Configurable via CODEGROK_TIMEOUT environment variable in MCP client config.
+# Example in claude_desktop_config.json:
+#   "env": {"CODEGROK_TIMEOUT": "1200"}
+DEFAULT_TIMEOUT_SECONDS = 600  # 10 minutes
+
+
+def _get_timeout(override: Optional[int] = None) -> int:
+    """Get the effective timeout in seconds.
+
+    Priority: per-call override > CODEGROK_TIMEOUT env var > DEFAULT_TIMEOUT_SECONDS.
+    """
+    if override is not None and override > 0:
+        return override
+    env_timeout = os.environ.get("CODEGROK_TIMEOUT")
+    if env_timeout:
+        try:
+            val = int(env_timeout)
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    return DEFAULT_TIMEOUT_SECONDS
+
 
 # Initialize FastMCP server
 mcp = FastMCP(
@@ -199,6 +225,12 @@ async def learn(
     embedding_model: Annotated[
         str, Field(description="Embedding model to use (default: coderankembed)")
     ] = "coderankembed",
+    timeout_seconds: Annotated[
+        Optional[int],
+        Field(
+            description="Timeout in seconds for indexing. Overrides CODEGROK_TIMEOUT env var. Default: 600 (10 min)."
+        ),
+    ] = None,
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """Index a codebase with smart mode detection."""
@@ -220,7 +252,10 @@ async def learn(
     paths = _get_codegrok_paths(codebase_path)
     has_existing = _has_valid_index(paths)
 
-    # Handle load_only mode
+    # Resolve timeout
+    timeout = _get_timeout(timeout_seconds)
+
+    # Handle load_only mode (no timeout needed — just loads metadata)
     if mode == "load_only":
         if not has_existing:
             raise ToolError(
@@ -231,10 +266,30 @@ async def learn(
 
     # Handle auto mode with existing index -> incremental reindex
     if mode == "auto" and has_existing:
-        return await _incremental_reindex(codebase_path, paths, state, embedding_model, ctx)
+        try:
+            return await asyncio.wait_for(
+                _incremental_reindex(codebase_path, paths, state, embedding_model, ctx),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            raise ToolError(
+                f"Indexing timed out after {timeout}s. "
+                f"Set CODEGROK_TIMEOUT env var or pass timeout_seconds to increase. "
+                f"Checkpoint saved — re-run to resume."
+            )
 
     # Full index: mode == "full" OR (mode == "auto" and no existing index)
-    return await _full_index(codebase_path, paths, state, file_extensions, embedding_model, ctx)
+    try:
+        return await asyncio.wait_for(
+            _full_index(codebase_path, paths, state, file_extensions, embedding_model, ctx),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        raise ToolError(
+            f"Indexing timed out after {timeout}s. "
+            f"Set CODEGROK_TIMEOUT env var or pass timeout_seconds to increase. "
+            f"Checkpoint saved — re-run to resume."
+        )
 
 
 async def _load_existing_index(
@@ -294,8 +349,10 @@ async def _incremental_reindex(
         loop = asyncio.get_event_loop()
         progress_callback = _create_relearn_progress_callback(ctx, loop)
 
-    # Perform incremental reindex
-    result = retriever.incremental_reindex(progress_callback=progress_callback)
+    # Run blocking reindex in a thread so asyncio.wait_for can cancel it
+    result = await asyncio.to_thread(
+        retriever.incremental_reindex, progress_callback=progress_callback
+    )
 
     # Save updated metadata
     retriever.save_metadata(str(paths["metadata_path"]))
@@ -338,9 +395,11 @@ async def _full_index(
         persist_path=str(paths["chroma_path"]),
     )
 
-    # Index the codebase with progress reporting
+    # Run blocking indexing in a thread so asyncio.wait_for can cancel it
     extensions = file_extensions if file_extensions else SUPPORTED_EXTENSIONS
-    retriever.index_codebase(file_extensions=extensions, progress_callback=progress_callback)
+    await asyncio.to_thread(
+        retriever.index_codebase, file_extensions=extensions, progress_callback=progress_callback
+    )
 
     # Report saving phase
     if ctx:

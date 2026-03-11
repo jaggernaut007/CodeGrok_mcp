@@ -1,10 +1,14 @@
 """
-Unit tests for discover_files() — file discovery with .gitignore support.
+Unit tests for discover_files() and memory optimization constants.
 """
 
 import pytest
 from pathlib import Path
-from codegrok_mcp.indexing.source_retriever import discover_files
+from codegrok_mcp.indexing.source_retriever import (
+    discover_files,
+    FILE_BATCH_SIZE,
+    MAX_PARSE_WORKERS,
+)
 
 
 def _create_file(path: Path, content: str = "# placeholder"):
@@ -124,3 +128,17 @@ class TestDiscoverFilesLimits:
         # With only 5 files, callback won't fire (fires every 1000)
         assert len(files) == 5
         assert len(events) == 0  # Below threshold
+
+
+class TestMemoryOptimizationConstants:
+    """Test that memory optimization constants are set correctly."""
+
+    def test_file_batch_size(self):
+        """FILE_BATCH_SIZE is set to a reasonable value."""
+        assert FILE_BATCH_SIZE == 500
+        assert isinstance(FILE_BATCH_SIZE, int)
+
+    def test_max_parse_workers(self):
+        """MAX_PARSE_WORKERS caps parallel workers to limit memory."""
+        assert MAX_PARSE_WORKERS == 4
+        assert isinstance(MAX_PARSE_WORKERS, int)

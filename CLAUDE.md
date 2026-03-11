@@ -43,7 +43,9 @@ src/codegrok_mcp/
 - **Chunk Strategy**: Symbol-based (each function/class/method = 1 chunk)
 - **Max Chunk Size**: 4000 chars (~1000-1300 tokens)
 - **Storage**: `.codegrok/` (chromadb/ + metadata.json + memory_metadata.json + checkpoint.json)
-- **Parallelism**: CPU count - 1 workers (min 1, max 32)
+- **Parallelism**: CPU count - 1 workers (min 1, max 4 for parsing)
+- **File Batch Size**: 500 files per parse batch (memory optimization)
+- **Default Timeout**: 600s (configurable via `CODEGROK_TIMEOUT` env var or `timeout_seconds` param)
 - **Memory TTLs**: session (24h), day, week, month, permanent
 
 ## Commands
@@ -70,6 +72,9 @@ mypy src/                 # Type check
 10. **Indexing uses upsert** - `collection.upsert()` instead of delete-recreate; stale chunks cleaned after embedding
 11. **Checkpointing** - `.codegrok/checkpoint.json` saves progress every 1000 chunks; atomic writes via `os.replace()`; deleted on success
 12. **max_files safety limit** - `discover_files()` stops at 200K files to prevent DoS (addresses SECURITY_REVIEW HIGH-003)
+13. **Memory-optimized parsing** - Symbols converted to chunks per file batch (500 files), then freed; `gc.collect()` between batches; chunks list freed after embedding
+14. **Worker cap** - Parallel parse workers capped at `MAX_PARSE_WORKERS=4` to limit memory from tree-sitter instances
+15. **Configurable timeout** - `learn` tool has `timeout_seconds` param; also reads `CODEGROK_TIMEOUT` env var; defaults to 600s
 
 ## Adding Languages
 

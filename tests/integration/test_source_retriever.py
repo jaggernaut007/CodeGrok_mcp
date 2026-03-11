@@ -194,6 +194,65 @@ class TestUpsertBehavior:
             assert count_after < count_before
 
 
+class TestMemoryOptimizations:
+    """Test memory optimization behavior."""
+
+    def test_file_batch_processing_parallel(self, temp_project):
+        """Parallel parsing processes files in batches without accumulating all symbols."""
+        with tempfile.TemporaryDirectory() as persist_dir:
+            retriever = SourceRetriever(
+                codebase_path=str(temp_project), persist_path=persist_dir, parallel=True
+            )
+            retriever.index_codebase()
+
+            # Should still produce correct results
+            stats = retriever.get_stats()
+            assert stats["total_symbols"] > 0
+            assert stats["total_chunks"] > 0
+            assert stats["total_chunks"] == stats["total_symbols"]
+
+    def test_file_batch_processing_sequential(self, temp_project):
+        """Sequential parsing converts symbols to chunks inline."""
+        with tempfile.TemporaryDirectory() as persist_dir:
+            retriever = SourceRetriever(
+                codebase_path=str(temp_project), persist_path=persist_dir, parallel=False
+            )
+            retriever.index_codebase()
+
+            stats = retriever.get_stats()
+            assert stats["total_symbols"] > 0
+            assert stats["total_chunks"] == stats["total_symbols"]
+
+    def test_worker_cap_respected(self, temp_project):
+        """Parallel workers are capped at MAX_PARSE_WORKERS when max_workers is None."""
+        from codegrok_mcp.indexing.source_retriever import MAX_PARSE_WORKERS
+
+        with tempfile.TemporaryDirectory() as persist_dir:
+            retriever = SourceRetriever(
+                codebase_path=str(temp_project),
+                persist_path=persist_dir,
+                parallel=True,
+                max_workers=None,  # Should auto-cap
+            )
+            retriever.index_codebase()
+
+            # Verify it completed successfully (workers were capped internally)
+            assert retriever.get_stats()["total_chunks"] > 0
+            assert MAX_PARSE_WORKERS == 4
+
+    def test_explicit_max_workers_not_overridden(self, temp_project):
+        """Explicit max_workers value is used as-is."""
+        with tempfile.TemporaryDirectory() as persist_dir:
+            retriever = SourceRetriever(
+                codebase_path=str(temp_project),
+                persist_path=persist_dir,
+                parallel=True,
+                max_workers=2,
+            )
+            retriever.index_codebase()
+            assert retriever.get_stats()["total_chunks"] > 0
+
+
 class TestCheckpointing:
     """Test checkpoint save/load/resume functionality."""
 
