@@ -75,6 +75,8 @@ mypy src/                 # Type check
 13. **Memory-optimized parsing** - Symbols converted to chunks per file batch (500 files), then freed; `gc.collect()` between batches; chunks list freed after embedding
 14. **Worker cap** - Parallel parse workers capped at `MAX_PARSE_WORKERS=4` to limit memory from tree-sitter instances
 15. **Configurable timeout** - `learn` tool has `timeout_seconds` param; also reads `CODEGROK_TIMEOUT` env var; defaults to 600s
+16. **Background indexing** - `learn` returns immediately; indexing runs in `threading.Thread(daemon=True)`; client polls `get_stats()` for progress; `IndexingStatus` in `state.py` tracks progress thread-safely
+17. **learn stateful responses** - Returns `indexing_started` (new), `indexing_in_progress` (already running), `complete` (done, clears result), or raises `ToolError` (failed, clears error for retry)
 
 ## Adding Languages
 

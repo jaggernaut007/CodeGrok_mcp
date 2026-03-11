@@ -21,13 +21,14 @@ from typing import Optional, List, Dict, Any, Annotated, Callable
 from pathlib import Path
 import asyncio
 import os
+import threading
 
 from fastmcp import FastMCP, Context
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from codegrok_mcp.mcp.state import get_state
+from codegrok_mcp.mcp.state import get_state, IndexingStatus
 
 # Lazy import SourceRetriever to avoid heavy startup cost
 # from codegrok_mcp.indexing.source_retriever import SourceRetriever, SUPPORTED_EXTENSIONS
@@ -119,8 +120,8 @@ def _has_valid_index(paths: Dict[str, Path]) -> bool:
     )
 
 
-def _create_learn_progress_callback(ctx: Context, loop) -> Callable:
-    """Create a progress callback that reports indexing progress to MCP client."""
+def _create_bg_progress_callback(indexing_status: IndexingStatus) -> Callable:
+    """Create a progress callback that updates IndexingStatus (thread-safe)."""
 
     def callback(event_type: str, data: dict):
         progress = 0
@@ -142,7 +143,6 @@ def _create_learn_progress_callback(ctx: Context, loop) -> Callable:
             progress = 35
             message = f"Generating embeddings for {data['total']} chunks..."
         elif event_type == "embedding_progress":
-            # Scale embedding progress (35-95%)
             pct = data["current"] / data["total"] if data["total"] > 0 else 1
             progress = 35 + int(pct * 60)
             remaining = data.get("remaining_seconds")
@@ -155,40 +155,87 @@ def _create_learn_progress_callback(ctx: Context, loop) -> Callable:
             else:
                 eta_str = ""
             message = f"Embedding... ({data['current']}/{data['total']} chunks{eta_str})"
-        elif event_type == "complete":
-            progress = 100
-            message = "Indexing complete!"
-
-        if progress > 0:
-            asyncio.run_coroutine_threadsafe(ctx.report_progress(progress, 100, message), loop)
-
-    return callback
-
-
-def _create_relearn_progress_callback(ctx: Context, loop) -> Callable:
-    """Create a progress callback that reports reindexing progress to MCP client."""
-
-    def callback(event_type: str, data: dict):
-        progress = 0
-        message = ""
-
-        if event_type == "changes_detected":
+        elif event_type == "changes_detected":
             progress = 10
             message = f"Found {data['new']} new, {data['modified']} modified files..."
-        elif event_type == "parsing_start":
-            progress = 20
-            message = f"Parsing {data['total']} changed files..."
-        elif event_type == "embedding_start":
-            progress = 40
-            message = f"Updating embeddings for {data['total']} chunks..."
         elif event_type == "complete":
-            progress = 100
-            message = "Re-indexing complete!"
+            progress = 99
+            message = "Finishing up..."
 
         if progress > 0:
-            asyncio.run_coroutine_threadsafe(ctx.report_progress(progress, 100, message), loop)
+            indexing_status.update(progress, message)
 
     return callback
+
+
+def _run_full_index_bg(
+    codebase_path: Path,
+    paths: Dict[str, Path],
+    state,
+    file_extensions: Optional[List[str]],
+    embedding_model: str,
+):
+    """Run full indexing in a background thread. Updates state on completion."""
+    from codegrok_mcp.indexing.source_retriever import SourceRetriever
+
+    try:
+        retriever = SourceRetriever(
+            codebase_path=str(codebase_path),
+            embedding_model=embedding_model,
+            verbose=False,
+            persist_path=str(paths["chroma_path"]),
+        )
+
+        extensions = file_extensions if file_extensions else SUPPORTED_EXTENSIONS
+        progress_callback = _create_bg_progress_callback(state.indexing)
+
+        retriever.index_codebase(file_extensions=extensions, progress_callback=progress_callback)
+        retriever.save_metadata(str(paths["metadata_path"]))
+
+        state.retriever = retriever
+        state.codebase_path = codebase_path
+
+        state.indexing.complete(
+            {"success": True, "mode_used": "full", "stats": retriever.get_stats()}
+        )
+    except Exception as e:
+        state.indexing.fail(str(e))
+
+
+def _run_incremental_reindex_bg(
+    codebase_path: Path,
+    paths: Dict[str, Path],
+    state,
+    embedding_model: str,
+):
+    """Run incremental reindex in a background thread."""
+    from codegrok_mcp.indexing.source_retriever import SourceRetriever
+
+    try:
+        retriever = SourceRetriever(
+            codebase_path=str(codebase_path),
+            embedding_model=embedding_model,
+            verbose=False,
+            persist_path=str(paths["chroma_path"]),
+        )
+
+        if not retriever.load_existing_index():
+            state.indexing.fail(f"Failed to load existing index from {paths['chroma_path']}")
+            return
+
+        retriever.load_metadata(str(paths["metadata_path"]))
+
+        progress_callback = _create_bg_progress_callback(state.indexing)
+        result = retriever.incremental_reindex(progress_callback=progress_callback)
+
+        retriever.save_metadata(str(paths["metadata_path"]))
+
+        state.retriever = retriever
+        state.codebase_path = codebase_path
+
+        state.indexing.complete({"success": True, "mode_used": "incremental", **result})
+    except Exception as e:
+        state.indexing.fail(str(e))
 
 
 @mcp.tool(
@@ -199,6 +246,9 @@ Modes:
 - auto (default): Smart detection. If index exists, updates incrementally. If new, does full index.
 - full: Force complete re-index (destroys existing index).
 - load_only: Just load existing index without any indexing.
+
+Indexing runs in the background — this tool returns immediately.
+Call get_stats() to check progress. Once complete, search tools become available.
 
 Creates a .codegrok/ folder in the codebase directory.""",
     annotations=ToolAnnotations(
@@ -233,8 +283,31 @@ async def learn(
     ] = None,
     ctx: Context = None,
 ) -> Dict[str, Any]:
-    """Index a codebase with smart mode detection."""
+    """Index a codebase with smart mode detection. Returns immediately; indexing runs in background."""
     state = get_state()
+
+    # If indexing is already in progress, return current status
+    if state.indexing.active:
+        return {
+            "success": True,
+            "status": "indexing_in_progress",
+            "message": "Indexing is already running. Call get_stats() to check progress.",
+            **state.indexing.to_dict(),
+        }
+
+    # If last indexing completed, return the result and clear it
+    if state.indexing.result is not None:
+        result = state.indexing.result.copy()
+        result["status"] = "complete"
+        result["message"] = "Indexing completed successfully."
+        state.indexing.result = None  # Clear so next call can re-index
+        return result
+
+    # If last indexing failed, return the error
+    if state.indexing.error is not None:
+        error = state.indexing.error
+        state.indexing.error = None  # Clear so next call can retry
+        raise ToolError(f"Previous indexing failed: {error}. Retrying...")
 
     # Validate mode
     valid_modes = ("auto", "full", "load_only")
@@ -252,50 +325,51 @@ async def learn(
     paths = _get_codegrok_paths(codebase_path)
     has_existing = _has_valid_index(paths)
 
-    # Resolve timeout
-    timeout = _get_timeout(timeout_seconds)
-
-    # Handle load_only mode (no timeout needed — just loads metadata)
+    # Handle load_only mode (fast, no background needed)
     if mode == "load_only":
         if not has_existing:
             raise ToolError(
                 f"No existing index found at {codebase_path}. "
                 "Use mode='auto' or mode='full' to create one."
             )
-        return await _load_existing_index(codebase_path, paths, state, embedding_model)
+        return _load_existing_index_sync(codebase_path, paths, state, embedding_model)
 
-    # Handle auto mode with existing index -> incremental reindex
+    # Start background indexing
+    paths["codegrok_dir"].mkdir(parents=True, exist_ok=True)
+
     if mode == "auto" and has_existing:
-        try:
-            return await asyncio.wait_for(
-                _incremental_reindex(codebase_path, paths, state, embedding_model, ctx),
-                timeout=timeout,
-            )
-        except asyncio.TimeoutError:
-            raise ToolError(
-                f"Indexing timed out after {timeout}s. "
-                f"Set CODEGROK_TIMEOUT env var or pass timeout_seconds to increase. "
-                f"Checkpoint saved — re-run to resume."
-            )
-
-    # Full index: mode == "full" OR (mode == "auto" and no existing index)
-    try:
-        return await asyncio.wait_for(
-            _full_index(codebase_path, paths, state, file_extensions, embedding_model, ctx),
-            timeout=timeout,
+        state.indexing.start("Starting incremental reindex...")
+        thread = threading.Thread(
+            target=_run_incremental_reindex_bg,
+            args=(codebase_path, paths, state, embedding_model),
+            daemon=True,
         )
-    except asyncio.TimeoutError:
-        raise ToolError(
-            f"Indexing timed out after {timeout}s. "
-            f"Set CODEGROK_TIMEOUT env var or pass timeout_seconds to increase. "
-            f"Checkpoint saved — re-run to resume."
+    else:
+        state.indexing.start("Starting full index...")
+        thread = threading.Thread(
+            target=_run_full_index_bg,
+            args=(codebase_path, paths, state, file_extensions, embedding_model),
+            daemon=True,
         )
 
+    thread.start()
 
-async def _load_existing_index(
+    return {
+        "success": True,
+        "status": "indexing_started",
+        "message": (
+            f"Indexing started for {codebase_path.name}. "
+            "Call get_stats() to check progress. "
+            "Search tools will be available once indexing completes."
+        ),
+        **state.indexing.to_dict(),
+    }
+
+
+def _load_existing_index_sync(
     codebase_path: Path, paths: Dict[str, Path], state, embedding_model: str
 ) -> Dict[str, Any]:
-    """Load an existing index without any reindexing."""
+    """Load an existing index without any reindexing (synchronous, fast)."""
     from codegrok_mcp.indexing.source_retriever import SourceRetriever
 
     retriever = SourceRetriever(
@@ -317,106 +391,11 @@ async def _load_existing_index(
 
     return {
         "success": True,
+        "status": "complete",
         "mode_used": "load_only",
         "message": f"Loaded existing index for {codebase_path.name}",
         "stats": stats,
         "indexed_at": indexed_at,
-    }
-
-
-async def _incremental_reindex(
-    codebase_path: Path, paths: Dict[str, Path], state, embedding_model: str, ctx: Context = None
-) -> Dict[str, Any]:
-    """Load existing index and perform incremental reindex."""
-    from codegrok_mcp.indexing.source_retriever import SourceRetriever
-
-    retriever = SourceRetriever(
-        codebase_path=str(codebase_path),
-        embedding_model=embedding_model,
-        verbose=False,
-        persist_path=str(paths["chroma_path"]),
-    )
-
-    if not retriever.load_existing_index():
-        raise ToolError(f"Failed to load existing index from {paths['chroma_path']}")
-
-    # Load metadata to get file mtimes for incremental detection
-    retriever.load_metadata(str(paths["metadata_path"]))
-
-    # Create progress callback if context available
-    progress_callback = None
-    if ctx:
-        loop = asyncio.get_event_loop()
-        progress_callback = _create_relearn_progress_callback(ctx, loop)
-
-    # Run blocking reindex in a thread so asyncio.wait_for can cancel it
-    result = await asyncio.to_thread(
-        retriever.incremental_reindex, progress_callback=progress_callback
-    )
-
-    # Save updated metadata
-    retriever.save_metadata(str(paths["metadata_path"]))
-
-    state.retriever = retriever
-    state.codebase_path = codebase_path
-
-    return {
-        "success": True,
-        "mode_used": "incremental",
-        "message": f"Incremental reindex complete for {codebase_path.name}",
-        **result,
-    }
-
-
-async def _full_index(
-    codebase_path: Path,
-    paths: Dict[str, Path],
-    state,
-    file_extensions: Optional[List[str]],
-    embedding_model: str,
-    ctx: Context = None,
-) -> Dict[str, Any]:
-    """Perform full index (creates or replaces existing index)."""
-    from codegrok_mcp.indexing.source_retriever import SourceRetriever
-
-    # Create .codegrok directory
-    paths["codegrok_dir"].mkdir(parents=True, exist_ok=True)
-
-    # Create progress callback if context available
-    progress_callback = None
-    if ctx:
-        loop = asyncio.get_event_loop()
-        progress_callback = _create_learn_progress_callback(ctx, loop)
-
-    retriever = SourceRetriever(
-        codebase_path=str(codebase_path),
-        embedding_model=embedding_model,
-        verbose=False,
-        persist_path=str(paths["chroma_path"]),
-    )
-
-    # Run blocking indexing in a thread so asyncio.wait_for can cancel it
-    extensions = file_extensions if file_extensions else SUPPORTED_EXTENSIONS
-    await asyncio.to_thread(
-        retriever.index_codebase, file_extensions=extensions, progress_callback=progress_callback
-    )
-
-    # Report saving phase
-    if ctx:
-        await ctx.report_progress(95, 100, "Saving index...")
-
-    # Save metadata
-    retriever.save_metadata(str(paths["metadata_path"]))
-
-    # Update state
-    state.retriever = retriever
-    state.codebase_path = codebase_path
-
-    return {
-        "success": True,
-        "mode_used": "full",
-        "message": f"Successfully indexed {codebase_path.name}",
-        "stats": retriever.get_stats(),
     }
 
 
@@ -472,9 +451,10 @@ def get_sources(
 
 @mcp.tool(
     name="get_stats",
-    description="""Get statistics about the currently loaded codebase index.
+    description="""Get statistics about the currently loaded codebase index and indexing progress.
 
-Returns: files indexed, total chunks, symbols by type, languages detected, index creation time.""",
+Returns: files indexed, total chunks, symbols by type, languages detected, index creation time.
+If indexing is in progress, also returns progress percentage and ETA.""",
     annotations=ToolAnnotations(
         readOnlyHint=True,  # Only reads metadata
         idempotentHint=True,  # Same state = same results
@@ -482,17 +462,26 @@ Returns: files indexed, total chunks, symbols by type, languages detected, index
     ),
 )
 def get_stats() -> Dict[str, Any]:
-    """Get indexing statistics."""
+    """Get indexing statistics and progress."""
     state = get_state()
 
-    if not state.is_loaded:
-        return {"loaded": False, "codebase_path": None, "stats": None}
+    result: Dict[str, Any] = {}
 
-    return {
-        "loaded": True,
-        "codebase_path": str(state.codebase_path),
-        "stats": state.retriever.get_stats(),
-    }
+    # Include indexing status if active or recently completed/failed
+    indexing_info = state.indexing.to_dict()
+    if indexing_info["active"] or indexing_info["error"]:
+        result["indexing"] = indexing_info
+
+    if not state.is_loaded:
+        result["loaded"] = False
+        result["codebase_path"] = None
+        result["stats"] = None
+        return result
+
+    result["loaded"] = True
+    result["codebase_path"] = str(state.codebase_path)
+    result["stats"] = state.retriever.get_stats()
+    return result
 
 
 @mcp.tool(

@@ -73,6 +73,28 @@ Prevents the `learn` tool from running indefinitely on very large codebases:
 }
 ```
 
+### 8. Background Indexing
+
+Solves MCP transport timeout: clients (Claude Desktop, etc.) have ~60-120s transport-level
+timeouts that kill long-running tool calls. Now `learn` returns immediately and indexing
+runs in a background thread.
+
+- `learn` starts a `threading.Thread(daemon=True)` and returns `{"status": "indexing_started"}`
+- `IndexingStatus` dataclass in `state.py` provides thread-safe progress tracking with `threading.Lock`
+- `get_stats()` includes `indexing` field with `active`, `progress`, `message`, `error` when indexing is in progress
+- Polling pattern: client calls `get_stats()` repeatedly to check progress
+- If `learn` is called while indexing is active, returns `{"status": "indexing_in_progress"}`
+- If `learn` is called after completion, returns the result once and clears it
+- If previous indexing failed, raises `ToolError` with error details and clears for retry
+- `load_only` mode remains synchronous (fast, no background needed)
+
+**Workflow:**
+```
+1. learn(path="/project")         → {"status": "indexing_started", "progress": 0}
+2. get_stats()                    → {"indexing": {"active": true, "progress": 42, ...}}
+3. get_stats()                    → {"loaded": true, "stats": {...}}  (indexing done)
+```
+
 ## New Dependencies
 
 - `pathspec>=0.11.0` — Pure Python `.gitignore` pattern matching (used by `black`, `flake8`, etc.)
@@ -139,3 +161,32 @@ This feature was planned and implemented using the following MCP tools:
 | `test_file_batch_processing_sequential` | Sequential inline chunking produces correct results |
 | `test_worker_cap_respected` | Workers capped at MAX_PARSE_WORKERS |
 | `test_explicit_max_workers_not_overridden` | Explicit max_workers used as-is |
+
+### New Unit Tests (`tests/unit/test_background_indexing.py`)
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_initial_state` | IndexingStatus defaults are correct |
+| `test_start` | start() sets active, clears error/result |
+| `test_start_clears_previous_error` | Restart after failure clears error |
+| `test_start_clears_previous_result` | Restart after success clears result |
+| `test_update` | Progress and message update correctly |
+| `test_update_caps_at_99` | Progress capped at 99 (100 = complete only) |
+| `test_complete` | Complete sets progress=100, stores result |
+| `test_fail` | Fail sets error, deactivates |
+| `test_to_dict` | Dict output has correct fields |
+| `test_to_dict_excludes_result` | Result not exposed in to_dict |
+| `test_thread_safety` | 10 concurrent threads update without errors |
+| `test_state_has_indexing_status` | MCPSessionState includes IndexingStatus |
+| `test_singleton_state_has_indexing` | Singleton state has indexing field |
+| `test_callback_updates_indexing_status` | Progress callback updates status |
+| `test_callback_discovery_progress` | Discovery progress event handled |
+| `test_callback_embedding_progress_with_eta` | ETA displayed in message |
+| `test_learn_returns_in_progress_when_active` | learn rejects when already indexing |
+| `test_learn_returns_completed_result` | learn returns result after completion |
+| `test_learn_raises_on_previous_error` | learn raises ToolError on prior failure |
+| `test_learn_starts_background_thread` | learn spawns daemon thread |
+| `test_learn_auto_with_existing_uses_incremental` | auto mode uses incremental reindex |
+| `test_learn_full_mode_uses_full_index` | full mode uses full index |
+| `test_get_stats_includes_indexing_when_active` | get_stats shows indexing progress |
+| `test_get_stats_no_indexing_when_idle` | get_stats omits indexing when idle |
